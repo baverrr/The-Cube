@@ -12,9 +12,9 @@ Press **Win+C**, spin the cube, and click a face to jump to that desktop.
 > **Win+C** opens and closes the cube. **Ctrl+F1–F4** jump straight to desktops 1–4.
 
 > [!WARNING]
-> **Work in progress.** Phases 1–3 of 6 are done. The app switches Windows' own virtual desktops,
-> handles Ctrl+F1–F4, and builds the picture for each face of the cube, but the cube itself isn't drawn yet. For now it opens a diagnostics window,
-> described in [Testing the current build](#testing-the-current-build). See [PLAN.md](PLAN.md).
+> **Work in progress.** Phases 1–4 of 6 are done: the cube works, but hasn't been tested on Windows yet.
+> The tray icon, settings window and Win+C fallback come next. Until then the app opens a diagnostics
+> window, described in [Testing the current build](#testing-the-current-build). See [PLAN.md](PLAN.md).
 
 Screenshots will be added once the cube runs on Windows (phase 6).
 
@@ -49,7 +49,7 @@ To build it yourself, see [Development](#development).
 - The same motion as Plasma's cube: zooms out from your current desktop tilted 20° down, and zooms back into the face you pick.
 - Drag to spin it, use the mouse wheel to zoom, or use the arrow keys to turn it one face at a time.
 - Works with Windows' own desktops, so Task View, Win+Ctrl+←/→ and the taskbar stay in sync.
-- Shows a window on every monitor, each with its own part of every desktop.
+- Shows a cube on every monitor, each with its own part of every desktop. Picking a desktop on one monitor zooms every monitor into it.
 - A plain colour or skybox image behind the cube, and optional screen-edge activation.
 
 ## Using it
@@ -65,24 +65,25 @@ To build it yourself, see [Development](#development).
 | Click a face | Go to that desktop |
 | Click empty space | Go to the face in front |
 | **Esc** | Close without switching |
+| Switching to another app (e.g. the Start menu) | Closes the cube |
 
 > Ctrl+F4 normally closes a tab or document in many Windows apps. The Cube takes it over by default
 > to match the Plasma set-up. Change `SwitchToDesktopHotkeys` if you want it back.
 
 ## Testing the current build
 
-Until the cube and tray icon are built, `TheCube.exe` opens a **diagnostics window**. It shows:
+Until the tray icon is built, `TheCube.exe` opens a **diagnostics window**, and closing it quits The Cube. It shows:
 
 - your Windows build and which set of desktop interfaces The Cube picked for it
 - whether each hotkey was registered, and why not if it wasn't
 - your desktops, with ▶ marking the current one. This updates live when you switch with Win+Ctrl+←/→.
-- **Switch** buttons, **Add desktop** and **Open settings file**
+- **Open cube** (the same as Win+C), **Switch** buttons, **Add desktop** and **Open settings file**
 - **Preview desktop images**: the picture each cube face would show, with one row per monitor and one column per desktop. Each one says how it was made:
   - the current desktop is a *screen grab*
   - on other desktops, windows are *live* (captured just now), *cached* (couldn't be captured now, so their last good image is used) or *missing* (never captured)
 
-Try Ctrl+F1–F4 from any app. Windows' slide animation should play, and the top window on the new desktop
-should get focus. Closing the diagnostics window quits The Cube.
+Try Win+C (or **Open cube**) and Ctrl+F1–F4 from any app. Ctrl+F1–F4 should play Windows' slide animation
+and give focus to the top window on the new desktop.
 
 **Getting a test build:** open the latest [CI run](https://github.com/baverrr/The-Cube/actions/workflows/ci.yml)
 and download the `TheCube-win-x64` artifact. Windows SmartScreen will warn about an unsigned app:
@@ -142,7 +143,9 @@ flowchart LR
 ```
 src/TheCube.Core/     Platform-neutral logic: geometry, camera, animation, controller, hotkeys, settings
 src/TheCube.App/      WPF app: start-up, hotkeys, diagnostics window
-  DesktopImages.cs    Builds each desktop's picture per monitor; FaceRenderer draws it
+  CubeSession.cs      Opens a cube on every monitor, keeps them in step, switches desktop at the end
+  CubeOverlay.cs      Full-screen window per monitor: 3D cube (Viewport3D), mouse/keyboard input, placeholder
+  DesktopImages.cs    Builds each desktop's picture per monitor; FaceRenderer turns it into a face brush
   Interop/            Virtual desktop COM interfaces (one set per Windows version), screen/window
                       capture, monitors, IDesktopWallpaper, Win32 calls
 tests/TheCube.Core.Tests/  xUnit tests for Core (run on any OS)
@@ -173,6 +176,9 @@ dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:Publish
   browsers and video players) can't be captured that way. They show their last good image if they were ever
   captured, and are left out otherwise. Minimized windows are left out, as in Plasma.
 - Desktop icons aren't drawn on other desktops' faces.
+- The skybox background is an approximation: a 360°×180° panorama image that pans as the cube turns,
+  rather than a true 3D environment.
+- Faces of other desktops fill in a moment after the cube opens; until then they're plain grey.
 - Windows may already use Win+C for Copilot. The Cube then falls back to a keyboard hook, and you can pick another hotkey in settings.
 
 ## License and privacy

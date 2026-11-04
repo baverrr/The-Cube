@@ -277,6 +277,24 @@ public class CubeControllerTests
     }
 
     [Fact]
+    public void ClosingTellsWhichDesktopAndCloseToFollowsWithoutSwitching()
+    {
+        var (a, switchesA, _) = Make();
+        var (b, switchesB, _) = Make();
+        a.Closing += d => b.CloseTo(d, 100);
+        b.Closing += d => a.CloseTo(d, 100);
+        a.Activate(0, 4, 1920, 1080, 0);
+        b.Activate(0, 4, 2560, 1440, 0);
+        a.Clicked(2, 100);
+        Assert.False(b.Activated);
+        Assert.Equal(2, b.CurrentDesktop);
+        a.Tick(0.016, 700);
+        b.Tick(0.016, 700);
+        Assert.Equal([2], switchesA);
+        Assert.Empty(switchesB);
+    }
+
+    [Fact]
     public void TwoDesktopsShowsPlaceholderAndClickCloses()
     {
         var (c, switches, _) = Make();

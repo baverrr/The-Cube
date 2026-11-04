@@ -19,6 +19,7 @@ public partial class App : Application
     internal CubeSettings Settings { get; private set; } = new();
     internal IVirtualDesktopService? Desktops { get; private set; }
     internal DesktopImageProvider? Images { get; private set; }
+    internal CubeSession? Cube { get; private set; }
     internal List<string> HotkeyProblems { get; } = [];
     internal string? StartupError { get; private set; }
     internal int DesktopsAdded { get; private set; }
@@ -65,6 +66,7 @@ public partial class App : Application
             StartupError = ex.Message;
         }
 
+        Cube = new CubeSession(this);
         _hotkeys = new HotkeyManager();
         RegisterHotkeys();
 
@@ -82,8 +84,7 @@ public partial class App : Application
             }
         }
 
-        // The cube itself arrives in a later phase; for now Win+C only proves the hotkey can be taken.
-        Add(Settings.ToggleCubeHotkey, () => Status?.Invoke($"{Settings.ToggleCubeHotkey} pressed (the cube itself isn't built yet)"));
+        Add(Settings.ToggleCubeHotkey, () => Cube?.Toggle());
 
         for (var i = 0; i < Settings.SwitchToDesktopHotkeys.Count; i++)
         {
@@ -92,9 +93,11 @@ public partial class App : Application
         }
     }
 
+    internal void ReportStatus(string message) => Status?.Invoke(message);
+
     private void SwitchFromHotkey(int index)
     {
-        if (Desktops is null)
+        if (Desktops is null || Cube?.IsOpen == true)
         {
             return;
         }

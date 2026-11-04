@@ -59,6 +59,12 @@ public sealed class CubeController
     /// <summary>Raised when the closing animation has finished and the overlay can go away.</summary>
     public event Action? Hidden;
 
+    /// <summary>
+    /// Raised when the cube starts closing, with the desktop it's zooming into. With one cube per
+    /// monitor, use it to close the others onto the same desktop (<see cref="CloseTo"/>).
+    /// </summary>
+    public event Action<int>? Closing;
+
     public void Toggle(int currentDesktop, int desktopCount, double screenWidth, double screenHeight, double now)
     {
         if (Activated)
@@ -109,6 +115,23 @@ public sealed class CubeController
         }
 
         _hideAt = now + _settings.AnimationDurationMs;
+        Closing?.Invoke(CurrentDesktop);
+    }
+
+    /// <summary>
+    /// Close by zooming into <paramref name="desktop"/> without requesting a switch: another monitor's
+    /// cube asked for it (or the desktop changed underneath).
+    /// </summary>
+    public void CloseTo(int desktop, double now)
+    {
+        if (!Activated)
+        {
+            return;
+        }
+
+        _pendingSwitch = null;
+        CurrentDesktop = Math.Clamp(desktop, 0, Math.Max(0, DesktopCount - 1));
+        Deactivate(now);
     }
 
     /// <summary>Switch to <paramref name="desktop"/> and close the cube, zooming into that face.</summary>

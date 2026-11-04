@@ -42,8 +42,12 @@ code is copied.
    `IDesktopWallpaper`, honouring fill/fit/stretch/center/tile/span), the taskbar and `PrintWindow`
    window images in z-order, on worker threads. Windows that come back blank fall back to their last
    good image (per-window cache, keyed by size). Per-monitor DPI aware. Temporary preview window.
-4. **Cube overlay** — borderless top-most window per monitor, WPF `Viewport3D` cube (vertical 60° FOV
+4. **Cube overlay** ✅ — borderless top-most window per monitor, WPF `Viewport3D` cube (vertical 60° FOV
    converted to WPF's horizontal FOV), hit testing, keyboard, drag, wheel, placeholder view.
+   Also done: one cube per monitor that close together onto the picked desktop
+   (`CubeController.Closing`/`CloseTo`); the switch happens after every overlay finishes; focus goes back
+   to the previous window on Esc; the cube closes if The Cube loses focus; other faces fill in once
+   captured; approximate panorama skybox.
 5. **App shell** — tray icon + menu (open cube, settings, start with Windows, quit), global hotkeys
    (`RegisterHotKey`, low-level hook fallback when Windows already owns Win+C), screen edges,
    settings window, single instance, `%APPDATA%\The Cube\settings.json`.

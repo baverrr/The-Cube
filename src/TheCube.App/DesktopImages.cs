@@ -265,10 +265,70 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
     }
 }
 
-/// <summary>Draws a <see cref="DesktopScene"/> into a single bitmap (a cube face).</summary>
+/// <summary>Turns a <see cref="DesktopScene"/> into something drawable: a brush for a cube face, or a bitmap.</summary>
 internal static class FaceRenderer
 {
-    /// <param name="scale">1 = full monitor resolution; smaller for thumbnails.</param>
+    /// <summary>The scene as a drawing in monitor pixel coordinates (0,0 to width,height).</summary>
+    public static Drawing ToDrawing(DesktopScene scene)
+    {
+        var full = new Rect(0, 0, scene.Monitor.Bounds.Width, scene.Monitor.Bounds.Height);
+        var group = new DrawingGroup { ClipGeometry = new RectangleGeometry(full) };
+        if (scene.Screenshot is { } shot)
+        {
+            group.Children.Add(new ImageDrawing(shot, full));
+        }
+        else
+        {
+            group.Children.Add(new GeometryDrawing(new SolidColorBrush(scene.Background), null, new RectangleGeometry(full)));
+            if (scene.Wallpaper is { } wallpaper)
+            {
+                foreach (var r in scene.WallpaperRects)
+                {
+                    group.Children.Add(new ImageDrawing(wallpaper, ToRect(r)));
+                }
+            }
+
+            foreach (var layer in scene.Windows)
+            {
+                group.Children.Add(new ImageDrawing(layer.Image, ToRect(layer.Frame)));
+            }
+        }
+
+        group.Freeze();
+        return group;
+    }
+
+    /// <summary>
+    /// A brush for a cube face. Composed faces are cached as a bitmap by WPF, so the many layers aren't
+    /// redrawn every frame of the animation.
+    /// </summary>
+    public static Brush ToBrush(DesktopScene scene)
+    {
+        Brush brush;
+        if (scene.Screenshot is { } shot)
+        {
+            brush = new ImageBrush(shot) { Stretch = Stretch.Fill };
+        }
+        else
+        {
+            var full = new Rect(0, 0, scene.Monitor.Bounds.Width, scene.Monitor.Bounds.Height);
+            brush = new DrawingBrush(ToDrawing(scene))
+            {
+                Stretch = Stretch.Fill,
+                Viewbox = full,
+                ViewboxUnits = BrushMappingMode.Absolute,
+            };
+            RenderOptions.SetCachingHint(brush, CachingHint.Cache);
+            RenderOptions.SetCacheInvalidationThresholdMinimum(brush, 0.5);
+            RenderOptions.SetCacheInvalidationThresholdMaximum(brush, 2.0);
+        }
+
+        RenderOptions.SetBitmapScalingMode(brush, BitmapScalingMode.HighQuality);
+        brush.Freeze();
+        return brush;
+    }
+
+    /// <summary>Draw the scene into a bitmap. <paramref name="scale"/> 1 = full monitor resolution.</summary>
     public static BitmapSource Render(DesktopScene scene, double scale = 1)
     {
         var width = Math.Max(1, (int)Math.Round(scene.Monitor.Bounds.Width * scale));
@@ -277,30 +337,7 @@ internal static class FaceRenderer
         using (var dc = visual.RenderOpen())
         {
             dc.PushTransform(new ScaleTransform(scale, scale));
-            var full = new Rect(0, 0, scene.Monitor.Bounds.Width, scene.Monitor.Bounds.Height);
-            dc.PushClip(new RectangleGeometry(full));
-            if (scene.Screenshot is { } shot)
-            {
-                dc.DrawImage(shot, full);
-            }
-            else
-            {
-                dc.DrawRectangle(new SolidColorBrush(scene.Background), null, full);
-                if (scene.Wallpaper is { } wallpaper)
-                {
-                    foreach (var r in scene.WallpaperRects)
-                    {
-                        dc.DrawImage(wallpaper, ToRect(r));
-                    }
-                }
-
-                foreach (var layer in scene.Windows)
-                {
-                    dc.DrawImage(layer.Image, ToRect(layer.Frame));
-                }
-            }
-
-            dc.Pop();
+            dc.DrawDrawing(ToDrawing(scene));
             dc.Pop();
         }
 

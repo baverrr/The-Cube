@@ -62,6 +62,7 @@ internal sealed class DiagnosticsWindow : Window
         root.Children.Add(_desktopList);
 
         var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
+        buttons.Children.Add(Button("Open cube", () => _app.Cube?.Toggle()));
         buttons.Children.Add(Button("Add desktop", () => Run(() => _app.Desktops!.CreateDesktop(), "Added a desktop")));
         buttons.Children.Add(Button("Preview desktop images", () =>
         {
