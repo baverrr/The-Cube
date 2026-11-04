@@ -81,6 +81,10 @@ To build it yourself, see [Development](#development).
 | Click a pager box | Go to that desktop |
 | Scroll over the pager | Next / previous desktop (wraps round) |
 
+<p align="center">
+  <img src="docs/images/pager.png" alt="The taskbar pager: four desktop boxes just left of the Start button, the first one highlighted" width="411">
+</p>
+
 **Tray icon:** left-click opens the cube. Right-click for **Open cube**, **Settings…**, **Diagnostics…**,
 **Start with Windows** and **Quit The Cube**. Starting `TheCube.exe` again while it's already running opens
 Settings.
