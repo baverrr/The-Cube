@@ -25,6 +25,7 @@ internal sealed class Taskbars
     private readonly Dictionary<(nint Taskbar, string Id), AutomationElement?> _elements = [];
     private readonly Dictionary<(nint Taskbar, string Id), DateTime> _misses = [];
     private readonly Dictionary<nint, string> _anchors = [];
+    private readonly Dictionary<nint, string> _searchLog = [];
 
     public List<TaskbarInfo> Find(IReadOnlyList<MonitorInfo> monitors)
     {
@@ -45,9 +46,10 @@ internal sealed class Taskbars
             _misses.Remove(key);
         }
 
-        foreach (var gone in _anchors.Keys.Except(handles).ToList())
+        foreach (var gone in _anchors.Keys.Concat(_searchLog.Keys).Except(handles).Distinct().ToList())
         {
             _anchors.Remove(gone);
+            _searchLog.Remove(gone);
         }
 
         var result = new List<TaskbarInfo>();
@@ -73,6 +75,11 @@ internal sealed class Taskbars
             var shown = NativeMethods.IsWindowVisible(hwnd) && onScreen.Height >= bounds.Height - 2 && onScreen.Width >= bounds.Width - 2;
 
             // Windows 10's Start button is a child window instead.
+            if (shown)
+            {
+                Prefetch(hwnd, StartButtonId, WidgetsButtonId); // one walk of the taskbar for both
+            }
+
             var xamlStart = shown ? Element(hwnd, StartButtonId) : null;
             var start = xamlStart ?? (shown ? Child(hwnd, "Start") : null);
             var tray = Child(hwnd, "TrayNotifyWnd");
@@ -154,6 +161,70 @@ internal sealed class Taskbars
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Look up every ID that isn't cached (and didn't just fail) in a single search of the taskbar's
+    /// UI Automation tree; searching is the slow part, so one walk instead of one per ID.
+    /// </summary>
+    private void Prefetch(nint taskbar, params string[] automationIds)
+    {
+        var needed = automationIds.Where(id =>
+            !(_elements.TryGetValue((taskbar, id), out var e) && e is not null)
+            && !(_misses.TryGetValue((taskbar, id), out var missedAt) && DateTime.UtcNow - missedAt < RetryMissAfter)).ToList();
+        if (needed.Count == 0)
+        {
+            return;
+        }
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var found = new Dictionary<string, AutomationElement>();
+        try
+        {
+            Condition condition = needed.Count == 1
+                ? new PropertyCondition(AutomationElement.AutomationIdProperty, needed[0])
+                : new OrCondition(needed.Select(id => (Condition)new PropertyCondition(AutomationElement.AutomationIdProperty, id)).ToArray());
+
+            // Fetch each match's ID with the search itself, so reading it can't fail if an element has
+            // gone by the time we look (the taskbar is often still being built just after sign-in).
+            var request = new CacheRequest();
+            request.Add(AutomationElement.AutomationIdProperty);
+            using (request.Activate())
+            {
+                foreach (AutomationElement element in AutomationElement.FromHandle(taskbar).FindAll(TreeScope.Descendants, condition))
+                {
+                    found.TryAdd(element.Cached.AutomationId, element);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is ElementNotAvailableException or COMException or InvalidOperationException or ArgumentException)
+        {
+            // Don't record misses: Element() falls back to its own lookup.
+            EventLog.Write($"pager: UI Automation search of the taskbar failed: {ex.GetType().Name} 0x{ex.HResult:X8}");
+            return;
+        }
+
+        foreach (var id in needed)
+        {
+            if (found.TryGetValue(id, out var element))
+            {
+                _elements[(taskbar, id)] = element;
+                _misses.Remove((taskbar, id));
+            }
+            else
+            {
+                _elements[(taskbar, id)] = null;
+                _misses[(taskbar, id)] = DateTime.UtcNow;
+            }
+        }
+
+        // Log the first search of each taskbar, slow ones, and changes in what was found; not every retry.
+        var summary = $"for {string.Join(", ", needed)}, found {string.Join(", ", found.Keys)}";
+        if (!_searchLog.TryGetValue(taskbar, out var last) || last != summary || clock.ElapsedMilliseconds > 200)
+        {
+            _searchLog[taskbar] = summary;
+            EventLog.Write($"pager: searched the taskbar {summary} in {clock.ElapsedMilliseconds} ms");
+        }
     }
 
     private static AutomationElement? FindElement(nint taskbar, string automationId)

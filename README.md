@@ -39,7 +39,7 @@ instead of switching.
 
 ## Quick start
 
-1. **Download** `TheCube.exe` from the latest CI run or release (Windows 10 21H2/22H2, or Windows 11 22H2, 23H2, 24H2 or 25H2; x64). It's a single self-contained file, so you don't need to install .NET.
+1. **Download** `TheCube.exe` from the latest CI run or release (Windows 10 21H2/22H2, or Windows 11 22H2, 23H2, 24H2 or 25H2; x64). It's a single self-contained file (about 190 MB, precompiled so it starts quickly), so you don't need to install .NET.
 2. **Run it.** The exe isn't code-signed yet, so Windows shows "Windows protected your PC" for a downloaded copy. To stop that for good, right-click the zip or `TheCube.exe` → **Properties** → tick **Unblock** → **OK** (or run `Unblock-File .\TheCube.exe` in PowerShell). Otherwise choose **More info → Run anyway**. The Cube
    then sits in the notification area (tray), adds virtual desktops until you have 4, and starts with
    Windows from then on. You can turn that off in the tray menu.
@@ -213,7 +213,7 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). The WPF app b
 ```sh
 dotnet build TheCube.slnx
 dotnet test TheCube.slnx
-dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o publish
+dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o publish
 ```
 
 ## Known limitations

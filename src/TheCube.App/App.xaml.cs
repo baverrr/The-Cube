@@ -139,6 +139,7 @@ public partial class App : Application
         TryApplyStartWithWindows();
 
         _tray = new TrayIcon(this);
+        EventLog.Write($"ready {(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds:0} ms after launch");
 
         var background = e.Args.Contains(StartWithWindows.BackgroundArgument);
         if (StartupError is not null || HotkeyProblems.Count > 0)

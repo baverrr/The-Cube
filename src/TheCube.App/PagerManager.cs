@@ -117,12 +117,19 @@ internal sealed class PagerManager : IDisposable
     {
         // Each loop has its own lookup cache: a cancelled loop's last Find may still be running.
         var taskbars = new Taskbars();
+        var first = true;
         while (!cancel.IsCancellationRequested)
         {
             List<TaskbarInfo> layout;
             try
             {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
                 layout = await Task.Run(() => taskbars.Find(Monitors.All()), cancel);
+                if (first)
+                {
+                    first = false;
+                    EventLog.Write($"pager: first taskbar read took {clock.ElapsedMilliseconds} ms ({layout.Count} taskbar(s))");
+                }
             }
             catch (OperationCanceledException)
             {
