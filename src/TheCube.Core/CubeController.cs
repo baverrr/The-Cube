@@ -19,6 +19,7 @@ public sealed class CubeController
 {
     private readonly CubeSettings _settings;
     private double _hideAt = double.NaN;
+    private int? _pendingSwitch;
 
     public CubeController(CubeSettings settings)
     {
@@ -48,7 +49,11 @@ public sealed class CubeController
     /// <summary>Desktop index the cube will land on when it closes.</summary>
     public int CurrentDesktop { get; private set; }
 
-    /// <summary>Raised with a 0-based desktop index when the user picks a desktop.</summary>
+    /// <summary>
+    /// Raised with a 0-based desktop index once the cube has finished zooming into the picked face,
+    /// just before <see cref="Hidden"/>. Switching only then keeps the overlay (which lives on the old
+    /// desktop) on screen for the whole animation; its last frame shows the new desktop.
+    /// </summary>
     public event Action<int>? SwitchRequested;
 
     /// <summary>Raised when the closing animation has finished and the overlay can go away.</summary>
@@ -72,6 +77,8 @@ public sealed class CubeController
         {
             return;
         }
+
+        _pendingSwitch = null;
 
         DesktopCount = desktopCount;
         CurrentDesktop = Math.Clamp(currentDesktop, 0, Math.Max(0, desktopCount - 1));
@@ -112,8 +119,12 @@ public sealed class CubeController
             return;
         }
 
+        if (desktop != CurrentDesktop)
+        {
+            _pendingSwitch = desktop;
+        }
+
         CurrentDesktop = desktop;
-        SwitchRequested?.Invoke(desktop);
         Deactivate(now);
     }
 
@@ -186,6 +197,12 @@ public sealed class CubeController
         {
             _hideAt = double.NaN;
             Visible = false;
+            if (_pendingSwitch is int target)
+            {
+                _pendingSwitch = null;
+                SwitchRequested?.Invoke(target);
+            }
+
             Hidden?.Invoke();
         }
     }

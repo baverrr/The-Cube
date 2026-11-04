@@ -195,11 +195,12 @@ public class CubeControllerTests
         c.KeyPressed(CubeKey.Right, 600);
         c.Tick(0.016, 1200);
         c.KeyPressed(CubeKey.Enter, 1200);
-        Assert.Equal([1], switches);
+        Assert.Empty(switches); // switch waits for the zoom-in to finish
         Assert.False(c.Activated);
         Assert.True(c.Visible); // closing animation still running
         c.Tick(0.016, 1700);
         Assert.False(c.Visible);
+        Assert.Equal([1], switches);
         Assert.Single(hidden);
     }
 
@@ -219,6 +220,8 @@ public class CubeControllerTests
         var (c, switches, _) = Make();
         c.Activate(0, 4, 1920, 1080, 0);
         c.Clicked(3, 100);
+        Assert.Equal(3, c.CurrentDesktop); // camera zooms into face 3
+        c.Tick(0.016, 700);
         Assert.Equal([3], switches);
     }
 
@@ -229,6 +232,34 @@ public class CubeControllerTests
         c.Activate(2, 4, 1920, 1080, 0);
         c.Tick(0.016, 600);
         c.Clicked(null, 600);
+        c.Tick(0.016, 1200);
+        Assert.Empty(switches); // face 2 is already the current desktop
+        Assert.False(c.Visible);
+    }
+
+    [Fact]
+    public void ClickingAwayFromCurrentFaceSwitchesAfterAnimation()
+    {
+        var (c, switches, _) = Make();
+        c.Activate(2, 4, 1920, 1080, 0);
+        c.Tick(0.016, 600);
+        c.KeyPressed(CubeKey.Left, 600);
+        c.Tick(0.016, 1200);
+        c.Clicked(null, 1200);
+        c.Tick(0.016, 1800);
+        Assert.Equal([1], switches);
+    }
+
+    [Fact]
+    public void EscapeAfterReopenDoesNotReplayOldSwitch()
+    {
+        var (c, switches, _) = Make(duration: 0);
+        c.Activate(0, 4, 1920, 1080, 0);
+        c.Clicked(2, 0);
+        c.Tick(0.016, 1);
+        c.Activate(2, 4, 1920, 1080, 2);
+        c.KeyPressed(CubeKey.Escape, 3);
+        c.Tick(0.016, 4);
         Assert.Equal([2], switches);
     }
 
@@ -331,4 +362,54 @@ public class SettingsTests
 
     [Fact]
     public void MissingFileGivesDefaults() => Assert.Equal(1.75, CubeSettings.Load("/nonexistent/x.json").DistanceFactor);
+}
+
+public class DesktopTests
+{
+    private sealed class FakeDesktops(int count, int current = 0) : IVirtualDesktopService
+    {
+        public int Count = count;
+        public int Current = current;
+        public List<(int Index, bool Animate)> Switches = [];
+
+        public string BackendName => "fake";
+        public IReadOnlyList<DesktopInfo> GetDesktops() =>
+            Enumerable.Range(0, Count).Select(i => new DesktopInfo(i, Guid.NewGuid(), null)).ToList();
+        public int GetCurrentIndex() => Current;
+        public void SwitchTo(int index, bool animate) { Switches.Add((index, animate)); Current = index; }
+        public void CreateDesktop() => Count++;
+        public int? GetWindowDesktopIndex(nint hwnd) => null;
+    }
+
+    [Fact]
+    public void EnsureCountAddsMissingDesktops()
+    {
+        var d = new FakeDesktops(1);
+        Assert.Equal(3, DesktopActions.EnsureCount(d, 4));
+        Assert.Equal(4, d.Count);
+        Assert.Equal(0, DesktopActions.EnsureCount(d, 4));
+        Assert.Equal(0, DesktopActions.EnsureCount(d, 0));
+    }
+
+    [Fact]
+    public void SwitchIgnoresMissingAndCurrentDesktops()
+    {
+        var d = new FakeDesktops(4, current: 1);
+        Assert.False(DesktopActions.SwitchTo(d, 1, true));
+        Assert.False(DesktopActions.SwitchTo(d, 4, true));
+        Assert.False(DesktopActions.SwitchTo(d, -1, true));
+        Assert.True(DesktopActions.SwitchTo(d, 3, true));
+        Assert.Equal([(3, true)], d.Switches);
+    }
+
+    [Theory]
+    [InlineData(19045, DesktopApiVersion.Windows10)]
+    [InlineData(19044, DesktopApiVersion.Windows10)]
+    [InlineData(19041, DesktopApiVersion.Unsupported)]
+    [InlineData(22000, DesktopApiVersion.Unsupported)]
+    [InlineData(22631, DesktopApiVersion.Windows11)]
+    [InlineData(26100, DesktopApiVersion.Windows11_24H2)]
+    [InlineData(26200, DesktopApiVersion.Windows11_24H2)]
+    public void PicksInterfacesByBuild(int build, DesktopApiVersion expected) =>
+        Assert.Equal(expected, DesktopApiSelector.ForBuild(build));
 }

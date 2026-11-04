@@ -29,10 +29,14 @@ code is copied.
 
 1. **Core + scaffold** ✅ — solution, platform-neutral cube math (geometry, camera, animation,
    controller, hotkeys, settings) with unit tests, CI on `windows-latest`, MIT license.
-2. **Windows virtual desktops** — COM interop with Windows' own desktops: count, current, switch,
+2. **Windows virtual desktops** ✅ — COM interop with Windows' own desktops: count, current, switch,
    create, window→desktop, change notifications. Documented `IVirtualDesktopManager` plus the
    undocumented internal interfaces, with a GUID table per Windows build (10 22H2, 11 23H2/24H2/25H2)
-   and a clear "unsupported build" message instead of a crash.
+   and a clear "unsupported build" message instead of a crash. Also done: Ctrl+F1..F4 hotkeys,
+   adding desktops up to `EnsureDesktopCount`, reconnecting after an Explorer restart, focusing the
+   top window after a switch, and a temporary diagnostics window. Change notifications are polled
+   instead of using a further undocumented interface. The cube now switches desktops only when its
+   zoom-in finishes, because the overlay lives on the old desktop and would vanish mid-animation.
 3. **Desktop images** — capture the current desktop per monitor before the overlay shows; compose
    other desktops from wallpaper + `PrintWindow` window images in z-order; cache snapshots on switch.
 4. **Cube overlay** — borderless top-most window per monitor, WPF `Viewport3D` cube (vertical 60° FOV
