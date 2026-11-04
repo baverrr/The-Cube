@@ -59,5 +59,5 @@ code is copied.
    then ignoring Win+C, the opening flicker, and other faces showing the old static wallpaper when an
    animated-wallpaper app (Lively) is in use. Added at the user's request: a Plasma-style desktop pager on
    every taskbar, just left of Start. Signing prep (done): release workflow (draft release on a `v*` tag; SignPath signing switched on by a repository variable once accepted), code signing policy in the README, first-run notice before adding desktops or the start-up entry, version metadata; see docs/SIGNING.md. Pager, auto-hide sliding, quick start-up and Lively faces confirmed working on Windows 11; screenshots from
-   that PC are in the README (docs/images). Still to do: the first-run question test, the
-   first GitHub release (`v0.1.0` tag) and the security review.
+   that PC are in the README (docs/images). First-run question confirmed. Still to do: the
+   first GitHub release (`v0.1.0` tag). Security review done 11-04: DLL imports limited to System32, CI checkouts without stored git credentials, SignPath action pinned to a commit.
