@@ -12,8 +12,8 @@ Press **Win+C**, spin the cube, and click a face to jump to that desktop.
 > **Win+C** opens and closes the cube. **Ctrl+F1–F4** jump straight to desktops 1–4.
 
 > [!WARNING]
-> **Work in progress.** Phases 1–2 of 6 are done. The app switches Windows' own virtual desktops and
-> handles Ctrl+F1–F4, but the cube itself isn't drawn yet. For now it opens a diagnostics window,
+> **Work in progress.** Phases 1–3 of 6 are done. The app switches Windows' own virtual desktops,
+> handles Ctrl+F1–F4, and builds the picture for each face of the cube, but the cube itself isn't drawn yet. For now it opens a diagnostics window,
 > described in [Testing the current build](#testing-the-current-build). See [PLAN.md](PLAN.md).
 
 Screenshots will be added once the cube runs on Windows (phase 6).
@@ -77,6 +77,9 @@ Until the cube and tray icon are built, `TheCube.exe` opens a **diagnostics wind
 - whether each hotkey was registered, and why not if it wasn't
 - your desktops, with ▶ marking the current one. This updates live when you switch with Win+Ctrl+←/→.
 - **Switch** buttons, **Add desktop** and **Open settings file**
+- **Preview desktop images**: the picture each cube face would show, with one row per monitor and one column per desktop. Each one says how it was made:
+  - the current desktop is a *screen grab*
+  - on other desktops, windows are *live* (captured just now), *cached* (couldn't be captured now, so their last good image is used) or *missing* (never captured)
 
 Try Ctrl+F1–F4 from any app. Windows' slide animation should play, and the top window on the new desktop
 should get focus. Closing the diagnostics window quits The Cube.
@@ -139,7 +142,9 @@ flowchart LR
 ```
 src/TheCube.Core/     Platform-neutral logic: geometry, camera, animation, controller, hotkeys, settings
 src/TheCube.App/      WPF app: start-up, hotkeys, diagnostics window
-  Interop/            Windows virtual desktop COM interfaces (one set per Windows version) + Win32 calls
+  DesktopImages.cs    Builds each desktop's picture per monitor; FaceRenderer draws it
+  Interop/            Virtual desktop COM interfaces (one set per Windows version), screen/window
+                      capture, monitors, IDesktopWallpaper, Win32 calls
 tests/TheCube.Core.Tests/  xUnit tests for Core (run on any OS)
 .github/workflows/     CI: build, test, publish win-x64 exe on windows-latest
 PLAN.md                Phases and what's left
@@ -163,7 +168,11 @@ dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:Publish
   shows a message instead of crashing. Windows Server and Windows 11 21H2 aren't supported.
 - If Explorer restarts, The Cube reconnects automatically.
 - `Ctrl+F1–F4` use Windows' slide animation on Windows 11. Windows 10 has no animated switch.
-- Windows can't render live images of windows on other desktops. Those faces show composed or cached images, and some GPU-rendered apps may appear black or out of date.
+- Windows has no live view of other desktops. Their faces are composed when the cube opens, from the wallpaper,
+  the taskbar and each window as Windows renders it (`PrintWindow`). Some GPU-rendered apps (games, some
+  browsers and video players) can't be captured that way. They show their last good image if they were ever
+  captured, and are left out otherwise. Minimized windows are left out, as in Plasma.
+- Desktop icons aren't drawn on other desktops' faces.
 - Windows may already use Win+C for Copilot. The Cube then falls back to a keyboard hook, and you can pick another hotkey in settings.
 
 ## License and privacy

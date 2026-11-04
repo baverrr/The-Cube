@@ -1,0 +1,314 @@
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using TheCube.App.Interop;
+using TheCube.Core;
+
+namespace TheCube.App;
+
+internal enum LayerSource
+{
+    /// <summary>Captured just now.</summary>
+    Live,
+
+    /// <summary>Couldn't capture now; this is the window's last good image.</summary>
+    Cached,
+}
+
+/// <summary>A window image placed on a face, relative to the monitor's top-left corner.</summary>
+internal sealed record WindowLayer(nint Handle, BitmapSource Image, PixelRect Frame, LayerSource Source);
+
+/// <summary>Everything needed to draw one desktop on one monitor.</summary>
+internal sealed record DesktopScene(
+    int Desktop,
+    MonitorInfo Monitor,
+    Color Background,
+    BitmapSource? Wallpaper,
+    IReadOnlyList<PixelRect> WallpaperRects,
+    IReadOnlyList<WindowLayer> Windows,
+    int MissingWindows,
+    BitmapSource? Screenshot)
+{
+    public bool IsCurrent => Screenshot is not null;
+}
+
+/// <summary>
+/// Builds a picture of every desktop on every monitor, like KWin's per-desktop views:
+/// the current desktop is a screen grab; other desktops are their wallpaper plus each window,
+/// rendered by Windows (PrintWindow) and stacked in z-order. Windows that can't be captured fall back
+/// to their last good image, or are left out.
+/// </summary>
+internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
+{
+    private const int DWM_CLOAKED_APP = 0x1;
+    private const int DWM_CLOAKED_INHERITED = 0x4;
+
+    private readonly WindowImageCache<BitmapSource> _windowCache = new();
+    private readonly Dictionary<string, (DateTime Written, BitmapSource Image)> _wallpaperCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _lock = new();
+
+    public TimeSpan LastBuildTime { get; private set; }
+
+    /// <summary>Grab every monitor as it looks now. Call on the UI thread before showing any overlay.</summary>
+    public static Dictionary<MonitorInfo, BitmapSource?> CaptureScreens(IReadOnlyList<MonitorInfo> monitors) =>
+        monitors.ToDictionary(m => m, m => Capture.Screen(m.Bounds));
+
+    /// <summary>
+    /// Build scenes for every desktop × monitor. Call on the UI thread (the desktop interfaces are
+    /// single-threaded); slow window captures run on worker threads.
+    /// </summary>
+    public async Task<IReadOnlyList<DesktopScene>> BuildAsync(
+        IReadOnlyList<MonitorInfo> monitors, Dictionary<MonitorInfo, BitmapSource?> screens)
+    {
+        var clock = Stopwatch.StartNew();
+        var desktopList = desktops.GetDesktops();
+        var current = desktops.GetCurrentIndex();
+        var wallpapers = WallpaperSettings.Read();
+        var windows = EnumerateWindows(desktopList);
+        var virtualScreen = Monitors.VirtualScreen(monitors);
+
+        var images = await Task.Run(() => CaptureWindows(windows));
+
+        var scenes = new List<DesktopScene>();
+        foreach (var monitor in monitors)
+        {
+            foreach (var desktop in desktopList)
+            {
+                if (desktop.Index == current && screens.GetValueOrDefault(monitor) is { } screen)
+                {
+                    scenes.Add(new DesktopScene(desktop.Index, monitor, wallpapers.Background, null, [], [], 0, screen));
+                    continue;
+                }
+
+                var path = desktop.WallpaperPath ?? wallpapers.PathFor(monitor);
+                var wallpaper = path is null ? null : await Task.Run(() => LoadWallpaper(path, monitors));
+                var rects = wallpaper is null
+                    ? []
+                    : WallpaperLayout.Place(wallpapers.Position, wallpaper.PixelWidth, wallpaper.PixelHeight, monitor.Bounds, virtualScreen);
+
+                var layers = new List<WindowLayer>();
+                var missing = 0;
+                foreach (var w in SceneBuilder.WindowsFor(windows, desktop.Index, monitor.Bounds))
+                {
+                    if (images.TryGetValue(w.Handle, out var layer) && layer is not null)
+                    {
+                        layers.Add(layer with { Frame = w.Frame.RelativeTo(monitor.Bounds) });
+                    }
+                    else
+                    {
+                        missing++;
+                    }
+                }
+
+                scenes.Add(new DesktopScene(desktop.Index, monitor, wallpapers.Background, wallpaper, rects, layers, missing, null));
+            }
+        }
+
+        LastBuildTime = clock.Elapsed;
+        return scenes;
+    }
+
+    private List<WindowEntry> EnumerateWindows(IReadOnlyList<DesktopInfo> desktopList)
+    {
+        var candidates = new List<(nint Handle, bool Taskbar)>();
+        NativeMethods.EnumWindows((hwnd, _) =>
+        {
+            var taskbar = IsTaskbar(hwnd);
+            if (taskbar ? NativeMethods.IsWindowVisible(hwnd) : IsCandidate(hwnd))
+            {
+                candidates.Add((hwnd, taskbar));
+            }
+
+            return true;
+        }, 0);
+
+        var onDesktop = desktops.GetWindowDesktops(candidates.Where(c => !c.Taskbar).Select(c => c.Handle), desktopList);
+        var result = new List<WindowEntry>();
+        foreach (var (hwnd, taskbar) in candidates)
+        {
+            int? desktop = taskbar ? null : onDesktop.GetValueOrDefault(hwnd);
+            var allDesktops = taskbar || desktop == -1;
+            if (!allDesktops && desktop is null)
+            {
+                continue; // not a window Windows puts on a desktop
+            }
+
+            result.Add(new WindowEntry(hwnd, Capture.GetFrame(hwnd), allDesktops ? null : desktop, allDesktops, NativeMethods.IsIconic(hwnd)));
+        }
+
+        lock (_lock)
+        {
+            _windowCache.Prune(result.Select(w => w.Handle));
+        }
+
+        return result;
+    }
+
+    /// <summary>Capture each window once (it may appear on several monitors), falling back to the cache.</summary>
+    private Dictionary<nint, WindowLayer?> CaptureWindows(IReadOnlyList<WindowEntry> windows)
+    {
+        var result = new Dictionary<nint, WindowLayer?>();
+        var todo = windows.Where(w => !w.Minimized && !w.Frame.IsEmpty).ToList();
+        var captured = new BitmapSource?[todo.Count];
+        Parallel.For(0, todo.Count, new ParallelOptions { MaxDegreeOfParallelism = 4 }, i =>
+            captured[i] = Capture.Window(todo[i].Handle, todo[i].Frame));
+
+        lock (_lock)
+        {
+            for (var i = 0; i < todo.Count; i++)
+            {
+                var w = todo[i];
+                if (captured[i] is { } image)
+                {
+                    _windowCache.Put(w.Handle, w.Frame.Width, w.Frame.Height, image);
+                    result[w.Handle] = new WindowLayer(w.Handle, image, w.Frame, LayerSource.Live);
+                }
+                else if (_windowCache.Get(w.Handle, w.Frame.Width, w.Frame.Height) is { } cached)
+                {
+                    result[w.Handle] = new WindowLayer(w.Handle, cached, w.Frame, LayerSource.Cached);
+                }
+                else
+                {
+                    result[w.Handle] = null;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private BitmapSource? LoadWallpaper(string path, IReadOnlyList<MonitorInfo> monitors)
+    {
+        try
+        {
+            var written = File.GetLastWriteTimeUtc(path);
+            lock (_lock)
+            {
+                if (_wallpaperCache.TryGetValue(path, out var hit) && hit.Written == written)
+                {
+                    return hit.Image;
+                }
+            }
+
+            // Decode at no more than the widest monitor's width (the virtual screen's for Span) to save memory.
+            var maxWidth = Math.Max(monitors.Max(m => m.Bounds.Width), Monitors.VirtualScreen(monitors).Width);
+            using var stream = File.OpenRead(path);
+            var probe = BitmapFrame.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+            stream.Position = 0;
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.StreamSource = stream;
+            if (probe.PixelWidth > maxWidth)
+            {
+                image.DecodePixelWidth = maxWidth;
+            }
+
+            image.EndInit();
+            image.Freeze();
+            lock (_lock)
+            {
+                _wallpaperCache[path] = (written, image);
+            }
+
+            return image;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or FileFormatException or ArgumentException)
+        {
+            return null; // missing, slideshow mid-change, or a format WIC can't read: draw the background colour
+        }
+    }
+
+    private static bool IsTaskbar(nint hwnd)
+    {
+        var name = ClassName(hwnd);
+        return name is "Shell_TrayWnd" or "Shell_SecondaryTrayWnd";
+    }
+
+    /// <summary>An app window, possibly on another desktop (cloaked by the shell, but not by the app).</summary>
+    private static bool IsCandidate(nint hwnd)
+    {
+        if (!NativeMethods.IsWindowVisible(hwnd))
+        {
+            return false;
+        }
+
+        if (NativeMethods.DwmGetWindowAttribute(hwnd, NativeMethods.DWMWA_CLOAKED, out var cloaked, sizeof(int)) == 0
+            && (cloaked & (DWM_CLOAKED_APP | DWM_CLOAKED_INHERITED)) != 0)
+        {
+            return false;
+        }
+
+        var exStyle = (long)NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
+        if ((exStyle & NativeMethods.WS_EX_APPWINDOW) != 0)
+        {
+            return true;
+        }
+
+        const uint GW_OWNER = 4;
+        return (exStyle & (NativeMethods.WS_EX_TOOLWINDOW | NativeMethods.WS_EX_NOACTIVATE)) == 0
+            && NativeMethods.GetWindow(hwnd, GW_OWNER) == 0
+            && NativeMethods.GetWindowTextLength(hwnd) > 0;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(nint hwnd, StringBuilder name, int max);
+
+    private static string ClassName(nint hwnd)
+    {
+        var sb = new StringBuilder(64);
+        return GetClassName(hwnd, sb, sb.Capacity) > 0 ? sb.ToString() : "";
+    }
+}
+
+/// <summary>Draws a <see cref="DesktopScene"/> into a single bitmap (a cube face).</summary>
+internal static class FaceRenderer
+{
+    /// <param name="scale">1 = full monitor resolution; smaller for thumbnails.</param>
+    public static BitmapSource Render(DesktopScene scene, double scale = 1)
+    {
+        var width = Math.Max(1, (int)Math.Round(scene.Monitor.Bounds.Width * scale));
+        var height = Math.Max(1, (int)Math.Round(scene.Monitor.Bounds.Height * scale));
+        var visual = new DrawingVisual();
+        using (var dc = visual.RenderOpen())
+        {
+            dc.PushTransform(new ScaleTransform(scale, scale));
+            var full = new Rect(0, 0, scene.Monitor.Bounds.Width, scene.Monitor.Bounds.Height);
+            dc.PushClip(new RectangleGeometry(full));
+            if (scene.Screenshot is { } shot)
+            {
+                dc.DrawImage(shot, full);
+            }
+            else
+            {
+                dc.DrawRectangle(new SolidColorBrush(scene.Background), null, full);
+                if (scene.Wallpaper is { } wallpaper)
+                {
+                    foreach (var r in scene.WallpaperRects)
+                    {
+                        dc.DrawImage(wallpaper, ToRect(r));
+                    }
+                }
+
+                foreach (var layer in scene.Windows)
+                {
+                    dc.DrawImage(layer.Image, ToRect(layer.Frame));
+                }
+            }
+
+            dc.Pop();
+            dc.Pop();
+        }
+
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(visual);
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private static Rect ToRect(PixelRect r) => new(r.X, r.Y, r.Width, r.Height);
+}

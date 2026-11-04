@@ -18,6 +18,7 @@ public partial class App : Application
 
     internal CubeSettings Settings { get; private set; } = new();
     internal IVirtualDesktopService? Desktops { get; private set; }
+    internal DesktopImageProvider? Images { get; private set; }
     internal List<string> HotkeyProblems { get; } = [];
     internal string? StartupError { get; private set; }
     internal int DesktopsAdded { get; private set; }
@@ -54,7 +55,9 @@ public partial class App : Application
 
         try
         {
-            Desktops = WindowsVirtualDesktops.Create();
+            var windowsDesktops = WindowsVirtualDesktops.Create();
+            Desktops = windowsDesktops;
+            Images = new DesktopImageProvider(windowsDesktops);
             DesktopsAdded = DesktopActions.EnsureCount(Desktops, Settings.EnsureDesktopCount);
         }
         catch (VirtualDesktopsUnsupportedException ex)

@@ -88,12 +88,33 @@ internal sealed class WindowsVirtualDesktops : IVirtualDesktopService
     }
 
     public IReadOnlyList<DesktopInfo> GetDesktops() => Call(api =>
+        api.GetDesktops()
+            .Select((d, i) => new DesktopInfo(i, api.GetId(d), api.GetWallpaper(d)))
+            .ToList());
+
+    /// <summary>
+    /// Desktop of each window in one pass. Null for windows Windows doesn't track; -1 for windows whose
+    /// desktop ID isn't one of the desktops (pinned to all desktops).
+    /// </summary>
+    internal Dictionary<nint, int?> GetWindowDesktops(IEnumerable<nint> windows, IReadOnlyList<DesktopInfo> desktops)
     {
-        var systemWallpaper = NativeMethods.GetSystemWallpaper();
-        return api.GetDesktops()
-            .Select((d, i) => new DesktopInfo(i, api.GetId(d), api.GetWallpaper(d) ?? systemWallpaper))
-            .ToList();
-    });
+        var byId = desktops.ToDictionary(d => d.Id, d => d.Index);
+        var result = new Dictionary<nint, int?>();
+        foreach (var hwnd in windows)
+        {
+            try
+            {
+                var id = _manager.GetWindowDesktopId(hwnd);
+                result[hwnd] = id == Guid.Empty ? null : byId.TryGetValue(id, out var index) ? index : -1;
+            }
+            catch (COMException)
+            {
+                result[hwnd] = null;
+            }
+        }
+
+        return result;
+    }
 
     public int GetCurrentIndex() => Call(api =>
     {

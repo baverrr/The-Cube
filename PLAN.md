@@ -37,8 +37,11 @@ code is copied.
    top window after a switch, and a temporary diagnostics window. Change notifications are polled
    instead of using a further undocumented interface. The cube now switches desktops only when its
    zoom-in finishes, because the overlay lives on the old desktop and would vanish mid-animation.
-3. **Desktop images** — capture the current desktop per monitor before the overlay shows; compose
-   other desktops from wallpaper + `PrintWindow` window images in z-order; cache snapshots on switch.
+3. **Desktop images** ✅ — capture the current desktop per monitor before the overlay shows; compose
+   other desktops from their wallpaper (per-desktop on Windows 11, else per monitor via the documented
+   `IDesktopWallpaper`, honouring fill/fit/stretch/center/tile/span), the taskbar and `PrintWindow`
+   window images in z-order, on worker threads. Windows that come back blank fall back to their last
+   good image (per-window cache, keyed by size). Per-monitor DPI aware. Temporary preview window.
 4. **Cube overlay** — borderless top-most window per monitor, WPF `Viewport3D` cube (vertical 60° FOV
    converted to WPF's horizontal FOV), hit testing, keyboard, drag, wheel, placeholder view.
 5. **App shell** — tray icon + menu (open cube, settings, start with Windows, quit), global hotkeys

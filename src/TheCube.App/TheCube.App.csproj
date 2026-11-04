@@ -13,6 +13,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>TheCube</AssemblyName>
     <Product>The Cube</Product>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
 </Project>

@@ -63,6 +63,13 @@ internal sealed class DiagnosticsWindow : Window
 
         var buttons = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
         buttons.Children.Add(Button("Add desktop", () => Run(() => _app.Desktops!.CreateDesktop(), "Added a desktop")));
+        buttons.Children.Add(Button("Preview desktop images", () =>
+        {
+            if (_app.Images is { } images)
+            {
+                new DesktopPreviewWindow(images) { Owner = this }.Show();
+            }
+        }));
         buttons.Children.Add(Button("Open settings file", () => Process.Start(new ProcessStartInfo(App.SettingsPath) { UseShellExecute = true })));
         root.Children.Add(buttons);
 

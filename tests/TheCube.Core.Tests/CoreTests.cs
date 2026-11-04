@@ -413,3 +413,96 @@ public class DesktopTests
     public void PicksInterfacesByBuild(int build, DesktopApiVersion expected) =>
         Assert.Equal(expected, DesktopApiSelector.ForBuild(build));
 }
+
+public class SceneTests
+{
+    private static readonly PixelRect Monitor = new(0, 0, 1920, 1080);
+
+    [Fact]
+    public void FillCoversAndCentres()
+    {
+        var r = Assert.Single(WallpaperLayout.Place(WallpaperPosition.Fill, 1000, 1000, Monitor, Monitor));
+        Assert.Equal(new PixelRect(0, -420, 1920, 1920), r);
+    }
+
+    [Fact]
+    public void FitLetterboxes()
+    {
+        var r = Assert.Single(WallpaperLayout.Place(WallpaperPosition.Fit, 1000, 1000, Monitor, Monitor));
+        Assert.Equal(new PixelRect(420, 0, 1080, 1080), r);
+    }
+
+    [Fact]
+    public void CenterKeepsSize() =>
+        Assert.Equal(new PixelRect(860, 440, 200, 200), Assert.Single(WallpaperLayout.Place(WallpaperPosition.Center, 200, 200, Monitor, Monitor)));
+
+    [Fact]
+    public void StretchFillsMonitor() =>
+        Assert.Equal(new PixelRect(0, 0, 1920, 1080), Assert.Single(WallpaperLayout.Place(WallpaperPosition.Stretch, 10, 10, Monitor, Monitor)));
+
+    [Fact]
+    public void TileCoversMonitor() =>
+        Assert.Equal(10 * 6, WallpaperLayout.Place(WallpaperPosition.Tile, 200, 200, Monitor, Monitor).Count);
+
+    [Fact]
+    public void SpanShowsThisMonitorsPart()
+    {
+        var right = new PixelRect(1920, 0, 1920, 1080);
+        var virtualScreen = new PixelRect(0, 0, 3840, 1080);
+        var r = Assert.Single(WallpaperLayout.Place(WallpaperPosition.Span, 3840, 1080, right, virtualScreen));
+        Assert.Equal(new PixelRect(-1920, 0, 3840, 1080), r);
+    }
+
+    [Fact]
+    public void WindowsForPicksDesktopMonitorAndBottomToTop()
+    {
+        var other = new PixelRect(1920, 0, 1920, 1080);
+        var list = new List<WindowEntry>
+        {
+            new(1, new PixelRect(0, 1040, 1920, 40), null, AllDesktops: true, Minimized: false), // taskbar, top
+            new(2, new PixelRect(100, 100, 800, 600), 1, false, false),
+            new(3, new PixelRect(100, 100, 800, 600), 0, false, false),                // other desktop
+            new(4, new PixelRect(2000, 100, 800, 600), 1, false, false),               // other monitor
+            new(5, new PixelRect(50, 50, 800, 600), 1, false, Minimized: true),
+            new(6, new PixelRect(1800, 0, 400, 400), 1, false, false),                 // straddles both
+        };
+        var result = SceneBuilder.WindowsFor(list, 1, Monitor).Select(w => w.Handle).ToList();
+        Assert.Equal([6, 2, 1], result);
+        Assert.Equal([6, 4], SceneBuilder.WindowsFor(list, 1, other).Select(w => w.Handle).ToList());
+    }
+
+    [Fact]
+    public void BlankDetection()
+    {
+        var black = new byte[100 * 100 * 4];
+        Assert.True(PixelChecks.LooksBlank(black, 100, 100, 400));
+        var img = (byte[])black.Clone();
+        for (var i = 0; i < img.Length; i += 4) { img[i] = 200; img[i + 3] = 255; }
+        Assert.False(PixelChecks.LooksBlank(img, 100, 100, 400));
+        Assert.True(PixelChecks.LooksBlank([], 0, 0, 0));
+        var bgr = new byte[100 * 100 * 4];
+        for (var i = 0; i < bgr.Length; i += 4) { bgr[i + 1] = 90; } // alpha byte stays 0 (padding)
+        Assert.True(PixelChecks.LooksBlank(bgr, 100, 100, 400));
+        Assert.False(PixelChecks.LooksBlank(bgr, 100, 100, 400, ignoreAlpha: true));
+    }
+
+    [Fact]
+    public void CacheMatchesOnlySameSizeAndPrunes()
+    {
+        var cache = new WindowImageCache<string>();
+        cache.Put(1, 800, 600, "a");
+        cache.Put(2, 100, 100, "b");
+        Assert.Equal("a", cache.Get(1, 800, 600));
+        Assert.Null(cache.Get(1, 801, 600));
+        cache.Prune([1]);
+        Assert.Null(cache.Get(2, 100, 100));
+        Assert.Equal(1, cache.Count);
+    }
+
+    [Fact]
+    public void RectIntersect()
+    {
+        Assert.Equal(new PixelRect(1800, 0, 120, 400), new PixelRect(1800, 0, 400, 400).Intersect(Monitor));
+        Assert.True(new PixelRect(1920, 0, 10, 10).Intersect(Monitor).IsEmpty);
+    }
+}
