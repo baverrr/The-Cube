@@ -879,3 +879,43 @@ public class PagerObstacleTests
         Assert.False(r.IntersectsWith(weather));
     }
 }
+
+public class CenteredTaskbarTests
+{
+    private static readonly PixelRect Taskbar = new(0, 1032, 1920, 48);
+    private static readonly PixelRect Tray = new(1700, 1032, 220, 48);
+    private const double Aspect = 16.0 / 9;
+
+    [Fact]
+    public void App_group_mirrors_start_around_the_middle()
+    {
+        var apps = Pager.CenteredAppGroup(Taskbar, new PixelRect(500, 1036, 40, 40))!.Value;
+        Assert.Equal(500, apps.X);
+        Assert.Equal(1420, apps.Right); // 960 + (960 - 500)
+        Assert.Null(Pager.CenteredAppGroup(Taskbar, new PixelRect(1000, 1036, 40, 40)));
+    }
+
+    [Fact]
+    public void Goes_right_of_the_apps_never_on_them_when_left_of_start_is_full()
+    {
+        var weather = new PixelRect(0, 1032, 430, 48);
+        var start = new PixelRect(500, 1036, 40, 40);
+        var apps = Pager.CenteredAppGroup(Taskbar, start)!.Value;
+        var r = Pager.Place(Taskbar, start, Tray, 4, Aspect, [weather, apps])!.Value;
+        Assert.False(r.IntersectsWith(apps));
+        Assert.False(r.IntersectsWith(Tray));
+        Assert.True(r.X >= apps.Right);
+    }
+
+    [Fact]
+    public void Shrinks_to_half_size_to_stay_left_of_start()
+    {
+        // 430 + 12 .. 488 = 46 px: too small. 300 + 12 .. 488 = 176 px: fits at reduced size.
+        var weather = new PixelRect(0, 1032, 300, 48);
+        var start = new PixelRect(500, 1036, 40, 40);
+        var apps = Pager.CenteredAppGroup(Taskbar, start)!.Value;
+        var r = Pager.Place(Taskbar, start, Tray, 4, Aspect, [weather, apps])!.Value;
+        Assert.Equal(start.X - 12, r.Right);
+        Assert.True(r.Height >= 16);
+    }
+}

@@ -37,7 +37,7 @@ public static class Pager
     }
 
     /// <summary>Smallest the boxes may shrink to fit a gap, as a fraction of their full height.</summary>
-    public const double MinimumScale = 0.6;
+    public const double MinimumScale = 0.5;
 
     /// <summary>
     /// Where the pager goes on a taskbar, in physical pixels: just left of the Start button, keeping clear
@@ -130,6 +130,22 @@ public static class Pager
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// On a centred taskbar (Windows 11's default) the Start button and app buttons form one group centred
+    /// on the taskbar, so its right end mirrors Start's left edge. The pager must not cover any of it.
+    /// Null if Start isn't left of the middle (then the taskbar isn't centred after all).
+    /// </summary>
+    public static PixelRect? CenteredAppGroup(PixelRect taskbar, PixelRect start)
+    {
+        var middle = taskbar.X + taskbar.Width / 2;
+        if (start.IsEmpty || start.X >= middle)
+        {
+            return null;
+        }
+
+        return new PixelRect(start.X, taskbar.Y, 2 * (middle - start.X), taskbar.Height);
     }
 
     /// <summary>

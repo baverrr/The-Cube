@@ -40,7 +40,7 @@ instead of switching.
 ## Quick start
 
 1. **Download** `TheCube.exe` from the latest CI run or release (Windows 10 21H2/22H2, or Windows 11 22H2, 23H2, 24H2 or 25H2; x64). It's a single self-contained file, so you don't need to install .NET.
-2. **Run it.** If SmartScreen warns about an unsigned app, choose **More info → Run anyway**. The Cube
+2. **Run it.** The exe isn't code-signed yet, so Windows shows "Windows protected your PC" for a downloaded copy. To stop that for good, right-click the zip or `TheCube.exe` → **Properties** → tick **Unblock** → **OK** (or run `Unblock-File .\TheCube.exe` in PowerShell). Otherwise choose **More info → Run anyway**. The Cube
    then sits in the notification area (tray), adds virtual desktops until you have 4, and starts with
    Windows from then on. You can turn that off in the tray menu.
 3. **Press Win+C.**
@@ -137,7 +137,7 @@ Settings are stored in `%APPDATA%\The Cube\settings.json`, which you can also ed
 | Some windows are missing from other desktops' faces | Those apps can't be captured while hidden. Visit that desktop once and they'll appear from then on. |
 | It doesn't start with Windows after moving `TheCube.exe` | The start-up entry points to the old location. Untick and tick **Start with Windows** again. |
 | The cube opens and immediately closes, or stops opening | Please send `%APPDATA%\The Cube\cube.log` (**Diagnostics… → Open log**). It records each open and close, and what had focus at the time. |
-| The pager covers something on the taskbar | With a left-aligned taskbar there's no room left of Start, so it sits left of the notification area instead. Turn it off in **Settings…** if it's in the way. |
+| The pager is in the wrong place or covers something | `cube.log` has a `pager:` line with where it went and what it fitted around (positions only). Please send it. With a left-aligned taskbar there's no room left of Start, so it sits left of the notification area. You can turn it off in **Settings…**. |
 | Other desktops show an old wallpaper | If you use an animated-wallpaper app, `cube.log` has a `live wallpaper:` line saying which window it found and whether it could be captured. Please send it. |
 | Something went wrong | Details are in `%APPDATA%\The Cube\error.log`. |
 
@@ -176,7 +176,8 @@ flowchart LR
 - **Pager.** One small tool window per taskbar. It never takes focus and shows on every desktop.
   - Windows 11's Start button isn't a window of its own, so its position comes from UI Automation (`StartButton`), read once a second on a background thread. A centred taskbar moves Start as apps open and close, and the pager follows.
   - Desktops and windows are read twice a second, and straight away whenever another window comes to the front. That also puts the pager back above the taskbar.
-  - It keeps clear of the Widgets (weather) button, also found with UI Automation (`WidgetsButton`). If the gap between that and Start is tight, the boxes shrink a little (to 60% at most); if it's still too small, the pager goes next to the notification area.
+  - It never covers the Widgets (weather) button, also found with UI Automation (`WidgetsButton`), or your apps. On a centred taskbar, the Start and app buttons are centred as one group, so the group's right end mirrors Start's left edge.
+  - If the gap between the weather and Start is tight, the boxes shrink (to half size at most). If it's still too small, the pager goes just right of the apps, next to the notification area.
   - It hides while the cube is open and while a full-screen app is in front. With an auto-hide taskbar, Windows reports each move of the taskbar window (`EVENT_OBJECT_LOCATIONCHANGE`) and the pager moves with it, so it slides away and back with the taskbar. Nothing polls while the taskbar stays put.
 
 </details>

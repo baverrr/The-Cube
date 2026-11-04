@@ -230,7 +230,9 @@ internal sealed class PagerManager : IDisposable
             if (taskbar.Shown)
             {
                 var aspect = monitor.Bounds.Height > 0 ? (double)monitor.Bounds.Width / monitor.Bounds.Height : 16.0 / 9;
-                if (Pager.Place(taskbar.Bounds, taskbar.Start, taskbar.Tray, list.Count, aspect, taskbar.Obstacles) is { } placed)
+                var placedAt = Pager.Place(taskbar.Bounds, taskbar.Start, taskbar.Tray, list.Count, aspect, taskbar.Obstacles);
+                LogPlacement(taskbar, placedAt);
+                if (placedAt is { } placed)
                 {
                     _anchors[taskbar.Handle] = (placed, taskbar.Bounds, list.Count);
                 }
@@ -393,6 +395,30 @@ internal sealed class PagerManager : IDisposable
             {
                 // Already woken.
             }
+        }
+    }
+
+    private readonly Dictionary<nint, string> _placementLog = [];
+
+    /// <summary>Log where the pager went and what it was fitting around (positions only), when that changes.</summary>
+    private void LogPlacement(TaskbarInfo taskbar, PixelRect? placed)
+    {
+        static string R(PixelRect? r) => r is { } v ? $"{v.X}..{v.Right}" : "-";
+        var where = placed is not { } p ? "nowhere (no room)"
+            : taskbar.Start is { } s && p.Right <= s.X ? "left of Start"
+            : taskbar.Tray is { } t && p.Right <= t.X ? "left of the tray"
+            : "elsewhere";
+        var line = $"pager: {where} at {R(placed)} h={placed?.Height}; taskbar {R(taskbar.Bounds)} h={taskbar.Bounds.Height}, " +
+                   $"Start {R(taskbar.Start)}, tray {R(taskbar.Tray)}, keep clear of [{string.Join(", ", taskbar.Obstacles.Select(o => R(o)))}]";
+        foreach (var gone in _placementLog.Keys.Except(_layout.Select(t => t.Handle)).ToList())
+        {
+            _placementLog.Remove(gone);
+        }
+
+        if (!_placementLog.TryGetValue(taskbar.Handle, out var last) || last != line)
+        {
+            _placementLog[taskbar.Handle] = line;
+            EventLog.Write(line);
         }
     }
 

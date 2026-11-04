@@ -73,12 +73,26 @@ internal sealed class Taskbars
             var shown = NativeMethods.IsWindowVisible(hwnd) && onScreen.Height >= bounds.Height - 2 && onScreen.Width >= bounds.Width - 2;
 
             // Windows 10's Start button is a child window instead.
-            var start = shown ? Element(hwnd, StartButtonId) ?? Child(hwnd, "Start") : null;
+            var xamlStart = shown ? Element(hwnd, StartButtonId) : null;
+            var start = xamlStart ?? (shown ? Child(hwnd, "Start") : null);
             var tray = Child(hwnd, "TrayNotifyWnd");
-            var obstacles = shown && Element(hwnd, WidgetsButtonId) is { } widgets ? new[] { widgets } : [];
+            var obstacles = new List<PixelRect>();
+            if (shown && Element(hwnd, WidgetsButtonId) is { } widgets)
+            {
+                obstacles.Add(widgets);
+            }
+
+            // Only Windows 11's own (XAML) taskbar can be centred; a classic Start window from a taskbar
+            // replacement is at the far left whatever TaskbarAl says. Ignore an implausible group too.
+            if (xamlStart is { } s && IsCentered() && Pager.CenteredAppGroup(bounds, s) is { } apps
+                && s.X - bounds.X > bounds.Height && (tray is not { } tr || apps.Right <= tr.X))
+            {
+                obstacles.Add(apps); // never on top of the pinned and running apps
+            }
+
             if (shown)
             {
-                LogAnchor(hwnd, (start is not null ? "Start button" : tray is not null ? "no Start button found; next to the tray" : "no Start button or tray found; right end") + (obstacles.Length > 0 ? ", keeping clear of the Widgets button" : ""));
+                LogAnchor(hwnd, (start is not null ? "Start button" : tray is not null ? "no Start button found; next to the tray" : "no Start button or tray found; right end") + (obstacles.Count > 0 ? $", keeping clear of {obstacles.Count} area(s)" : ""));
             }
 
             result.Add(new TaskbarInfo(hwnd, bounds, start, tray, obstacles, monitor.Monitor, shown));
@@ -154,6 +168,19 @@ internal sealed class Taskbars
             EventLog.Write($"pager: UI Automation lookup of {automationId} failed: {ex.GetType().Name} 0x{ex.HResult:X8}");
             return null;
         }
+    }
+
+    /// <summary>Windows 11 centres the taskbar unless "Taskbar alignment" is set to Left.</summary>
+    private static bool IsCentered()
+    {
+        if (Environment.OSVersion.Version.Build < 22000)
+        {
+            return false; // Windows 10 can't centre it
+        }
+
+        var value = Microsoft.Win32.Registry.GetValue(
+            @"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced", "TaskbarAl", 1);
+        return value is not int alignment || alignment != 0;
     }
 
     /// <summary>Log where each taskbar's pager is anchored, when that changes.</summary>
