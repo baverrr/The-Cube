@@ -34,6 +34,7 @@ internal sealed class SettingsWindow : Window
 
         Heading("General");
         _root.Children.Add(Check("Start with Windows", _edit.StartWithWindows, v => _edit.StartWithWindows = v));
+        _root.Children.Add(Check("Show the desktop pager on the taskbar (left of Start)", _edit.ShowPager, v => _edit.ShowPager = v));
         _root.Children.Add(Row("Keep at least this many virtual desktops", NumberBox(_edit.EnsureDesktopCount, 0, 20, v => _edit.EnsureDesktopCount = v),
             "The Cube adds desktops when it starts until there are this many. 0 = never add any."));
 
@@ -126,10 +127,12 @@ internal sealed class SettingsWindow : Window
         }
 
         var all = new[] { _edit.ToggleCubeHotkey }.Concat(_edit.SwitchToDesktopHotkeys).Where(h => !string.IsNullOrWhiteSpace(h)).ToList();
-        var duplicate = all.GroupBy(h => h, StringComparer.OrdinalIgnoreCase).FirstOrDefault(g => g.Count() > 1);
+        // Compare parsed hotkeys, so "Win+C" and "Meta+C" or "Ctrl+Alt+X" and "Alt+Ctrl+X" count as the same.
+        var duplicate = all.GroupBy(h => Hotkey.TryParse(h, out var parsed) ? parsed.ToString() : h.Trim().ToUpperInvariant())
+            .FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
         {
-            MessageBox.Show(this, $"{duplicate.Key} is used for more than one action.", "The Cube", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, $"{duplicate.First()} is used for more than one action.", "The Cube", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 

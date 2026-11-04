@@ -39,7 +39,7 @@ internal static class EventLog
         }
     }
 
-    /// <summary>"ClassName (process.exe)" for the current foreground window.</summary>
+    /// <summary>"ClassName (process[, us])" for the current foreground window.</summary>
     public static string ForegroundWindow()
     {
         var hwnd = GetForegroundWindow();

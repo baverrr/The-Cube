@@ -29,11 +29,15 @@ internal sealed record DesktopScene(
     Color Background,
     BitmapSource? Wallpaper,
     IReadOnlyList<PixelRect> WallpaperRects,
+    IReadOnlyList<LiveWallpaperImage> LiveWallpaper,
     IReadOnlyList<WindowLayer> Windows,
     int MissingWindows,
     BitmapSource? Screenshot)
 {
     public bool IsCurrent => Screenshot is not null;
+
+    /// <summary>An animated-wallpaper app's frame replaces the static wallpaper.</summary>
+    public bool HasLiveWallpaper => LiveWallpaper.Count > 0;
 }
 
 /// <summary>
@@ -50,6 +54,9 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
     private readonly WindowImageCache<BitmapSource> _windowCache = new();
     private readonly Dictionary<string, (DateTime Written, BitmapSource Image)> _wallpaperCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
+    private IReadOnlyList<LiveWallpaperImage> _lastLiveWallpaper = [];
+    private string _lastLiveWallpaperLog = "";
+    private readonly HashSet<string> _loggedWallpaperErrors = [];
 
     public TimeSpan LastBuildTime { get; private set; }
 
@@ -72,6 +79,7 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
         var virtualScreen = Monitors.VirtualScreen(monitors);
 
         var images = await Task.Run(() => CaptureWindows(windows));
+        var live = await Task.Run(CaptureLiveWallpaper);
 
         var scenes = new List<DesktopScene>();
         foreach (var monitor in monitors)
@@ -80,11 +88,15 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
             {
                 if (desktop.Index == current && screens.GetValueOrDefault(monitor) is { } screen)
                 {
-                    scenes.Add(new DesktopScene(desktop.Index, monitor, wallpapers.Background, null, [], [], 0, screen));
+                    scenes.Add(new DesktopScene(desktop.Index, monitor, wallpapers.Background, null, [], [], [], 0, screen));
                     continue;
                 }
 
-                var path = desktop.WallpaperPath ?? wallpapers.PathFor(monitor);
+                var liveHere = live
+                    .Where(l => l.Frame.IntersectsWith(monitor.Bounds))
+                    .Select(l => l with { Frame = l.Frame.RelativeTo(monitor.Bounds) })
+                    .ToList();
+                var path = liveHere.Count > 0 ? null : desktop.WallpaperPath ?? wallpapers.PathFor(monitor);
                 var wallpaper = path is null ? null : await Task.Run(() => LoadWallpaper(path, monitors));
                 var rects = wallpaper is null
                     ? []
@@ -104,7 +116,7 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
                     }
                 }
 
-                scenes.Add(new DesktopScene(desktop.Index, monitor, wallpapers.Background, wallpaper, rects, layers, missing, null));
+                scenes.Add(new DesktopScene(desktop.Index, monitor, wallpapers.Background, wallpaper, rects, liveHere, layers, missing, null));
             }
         }
 
@@ -114,10 +126,30 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
 
     private List<WindowEntry> EnumerateWindows(IReadOnlyList<DesktopInfo> desktopList)
     {
+        var result = ListWindows(desktops, desktopList);
+        lock (_lock)
+        {
+            _windowCache.Prune(result.Select(w => w.Handle));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// App windows on every desktop (plus the taskbars, unless told not to), top to bottom. Call on the UI thread (the desktop
+    /// interfaces are single-threaded).
+    /// </summary>
+    internal static List<WindowEntry> ListWindows(WindowsVirtualDesktops desktops, IReadOnlyList<DesktopInfo> desktopList, bool includeTaskbars = true)
+    {
         var candidates = new List<(nint Handle, bool Taskbar)>();
         NativeMethods.EnumWindows((hwnd, _) =>
         {
             var taskbar = IsTaskbar(hwnd);
+            if (taskbar && !includeTaskbars)
+            {
+                return true;
+            }
+
             if (taskbar ? NativeMethods.IsWindowVisible(hwnd) : IsCandidate(hwnd))
             {
                 candidates.Add((hwnd, taskbar));
@@ -138,11 +170,6 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
             }
 
             result.Add(new WindowEntry(hwnd, Capture.GetFrame(hwnd), allDesktops ? null : desktop, allDesktops, NativeMethods.IsIconic(hwnd)));
-        }
-
-        lock (_lock)
-        {
-            _windowCache.Prune(result.Select(w => w.Handle));
         }
 
         return result;
@@ -181,6 +208,37 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
         return result;
     }
 
+    /// <summary>
+    /// A frame of an animated-wallpaper app, if one is running. If it's running but this capture failed,
+    /// the last good frame is used rather than dropping back to the old static picture.
+    /// </summary>
+    private IReadOnlyList<LiveWallpaperImage> CaptureLiveWallpaper()
+    {
+        var result = LiveWallpaper.Find();
+        var log = result.Found
+            ? $"live wallpaper: windows=[{string.Join(", ", result.Windows)}] captured={result.Images.Count}"
+            : "live wallpaper: none";
+        lock (_lock)
+        {
+            if (log != _lastLiveWallpaperLog)
+            {
+                _lastLiveWallpaperLog = log;
+                EventLog.Write(log); // only when it changes, to keep the log short
+            }
+
+            if (!result.Found)
+            {
+                _lastLiveWallpaper = [];
+            }
+            else if (result.Images.Count > 0)
+            {
+                _lastLiveWallpaper = result.Images;
+            }
+
+            return _lastLiveWallpaper;
+        }
+    }
+
     private BitmapSource? LoadWallpaper(string path, IReadOnlyList<MonitorInfo> monitors)
     {
         try
@@ -194,7 +252,7 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
                 }
             }
 
-            // Decode at no more than the widest monitor's width (the virtual screen's for Span) to save memory.
+            // Decode at no more than the virtual screen's width (enough for any position, Span included) to save memory.
             var maxWidth = Math.Max(monitors.Max(m => m.Bounds.Width), Monitors.VirtualScreen(monitors).Width);
             using var stream = File.OpenRead(path);
             var probe = BitmapFrame.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
@@ -217,9 +275,20 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
 
             return image;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or FileFormatException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or FileFormatException or ArgumentException or COMException)
         {
-            return null; // missing, slideshow mid-change, or a format WIC can't read: draw the background colour
+            // Missing, slideshow mid-change, or a format WIC can't read: draw the background colour.
+            // Logged once per file, by name only (the folder can contain the user name).
+            var message = $"wallpaper: couldn't load {Path.GetFileName(path)}: {ex.GetType().Name}: {ex.Message}";
+            lock (_lock)
+            {
+                if (_loggedWallpaperErrors.Add(message))
+                {
+                    EventLog.Write(message);
+                }
+            }
+
+            return null;
         }
     }
 
@@ -280,7 +349,12 @@ internal static class FaceRenderer
         else
         {
             group.Children.Add(new GeometryDrawing(new SolidColorBrush(scene.Background), null, new RectangleGeometry(full)));
-            if (scene.Wallpaper is { } wallpaper)
+            foreach (var live in scene.LiveWallpaper)
+            {
+                group.Children.Add(new ImageDrawing(live.Image, ToRect(live.Frame)));
+            }
+
+            if (!scene.HasLiveWallpaper && scene.Wallpaper is { } wallpaper)
             {
                 foreach (var r in scene.WallpaperRects)
                 {

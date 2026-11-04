@@ -8,6 +8,8 @@ namespace TheCube.App;
 /// <summary>
 /// Fallback for hotkeys Windows won't let us register (e.g. Win+C when Windows keeps it for Copilot):
 /// a low-level keyboard hook that sees the key first, swallows it and runs the action.
+/// The hook runs on its own thread with its own message loop: Windows silently removes a low-level hook
+/// that answers too slowly, and the UI thread can be busy for a moment while the cube opens.
 /// </summary>
 internal sealed class KeyboardHook : IDisposable
 {
@@ -22,11 +24,16 @@ internal sealed class KeyboardHook : IDisposable
     /// <summary>An unassigned virtual key, sent so that releasing Win doesn't open the Start menu.</summary>
     private const ushort VK_NONE = 0xE8;
 
+    private const uint WM_QUIT = 0x0012;
+
     private readonly Dispatcher _dispatcher;
-    private readonly List<(Hotkey Key, Action Action)> _entries = [];
     private readonly HookProc _proc;
-    private nint _hook;
-    private uint? _heldKey;
+    private volatile (Hotkey Key, Action Action)[] _entries = []; // replaced whole, read on the hook thread
+    private Thread? _thread;
+    private uint _threadId;
+    private nint _hook; // touched only on the hook thread
+    private uint? _heldKey; // touched only on the hook thread
+    private bool _failed;
 
     public KeyboardHook(Dispatcher dispatcher)
     {
@@ -34,23 +41,67 @@ internal sealed class KeyboardHook : IDisposable
         _proc = Callback; // keep the delegate alive while the hook is installed
     }
 
-    public int Count => _entries.Count;
+    public int Count => _entries.Length;
 
     /// <summary>Handle <paramref name="hotkey"/> through the hook. Returns false if the hook can't be installed.</summary>
     public bool Add(Hotkey hotkey, Action action)
     {
-        if (_hook == 0)
+        if (_failed || (_thread is null && !Start()))
         {
-            using var module = Process.GetCurrentProcess().MainModule;
-            _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(module?.ModuleName), 0);
-            if (_hook == 0)
-            {
-                return false;
-            }
+            return false;
         }
 
-        _entries.Add((hotkey, action));
+        _entries = [.. _entries, (hotkey, action)];
         return true;
+    }
+
+    private bool Start()
+    {
+        using var installed = new ManualResetEventSlim();
+        var ok = false;
+        _thread = new Thread(() =>
+        {
+            _threadId = GetCurrentThreadId();
+            using (var module = Process.GetCurrentProcess().MainModule)
+            {
+                _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(module?.ModuleName), 0);
+            }
+
+            ok = _hook != 0;
+            if (!ok)
+            {
+                EventLog.Write($"keyboard hook: SetWindowsHookEx failed, error {Marshal.GetLastWin32Error()}");
+            }
+
+            installed.Set();
+            if (!ok)
+            {
+                return;
+            }
+
+            // The hook is called through this thread's message loop.
+            while (GetMessage(out var msg, 0, 0, 0) > 0)
+            {
+                TranslateMessage(ref msg);
+                DispatchMessage(ref msg);
+            }
+
+            UnhookWindowsHookEx(_hook);
+            _hook = 0;
+        })
+        {
+            IsBackground = true,
+            Name = "The Cube keyboard hook",
+        };
+        _thread.Start();
+        installed.Wait();
+        if (!ok)
+        {
+            _failed = true;
+            _thread = null;
+        }
+
+        return ok;
     }
 
     private nint Callback(int code, nint wParam, nint lParam)
@@ -125,13 +176,14 @@ internal sealed class KeyboardHook : IDisposable
 
     public void Dispose()
     {
-        if (_hook != 0)
+        if (_thread is { } thread)
         {
-            UnhookWindowsHookEx(_hook);
-            _hook = 0;
+            PostThreadMessage(_threadId, WM_QUIT, 0, 0);
+            thread.Join(TimeSpan.FromSeconds(2));
+            _thread = null;
         }
 
-        _entries.Clear();
+        _entries = [];
     }
 
     private delegate nint HookProc(int code, nint wParam, nint lParam);
@@ -185,6 +237,34 @@ internal sealed class KeyboardHook : IDisposable
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int vKey);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MSG
+    {
+        public nint hwnd;
+        public uint message;
+        public nint wParam;
+        public nint lParam;
+        public uint time;
+        public int ptX;
+        public int ptY;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern int GetMessage(out MSG msg, nint hwnd, uint min, uint max);
+
+    [DllImport("user32.dll")]
+    private static extern bool TranslateMessage(ref MSG msg);
+
+    [DllImport("user32.dll")]
+    private static extern nint DispatchMessage(ref MSG msg);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostThreadMessage(uint threadId, uint msg, nint wParam, nint lParam);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);

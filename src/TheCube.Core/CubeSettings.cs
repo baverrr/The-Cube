@@ -59,6 +59,9 @@ public sealed class CubeSettings
     /// <summary>Start The Cube when you sign in to Windows (like an always-on KWin effect).</summary>
     public bool StartWithWindows { get; set; } = true;
 
+    /// <summary>Show the desktop pager (like Plasma's Pager widget) on the taskbar, just left of Start.</summary>
+    public bool ShowPager { get; set; } = true;
+
     public string ToggleCubeHotkey { get; set; } = "Win+C";
 
     /// <summary>Hotkeys that jump straight to desktop 1, 2, 3, ... Empty strings are unbound.</summary>
@@ -100,7 +103,8 @@ public sealed class CubeSettings
     /// <summary>Clamp out-of-range values from a hand-edited file to something usable.</summary>
     public void Normalize()
     {
-        if (!double.IsFinite(FaceDisplacement)) FaceDisplacement = 100;
+        // A large negative displacement would put the faces behind the centre and the camera inside the cube.
+        FaceDisplacement = double.IsFinite(FaceDisplacement) ? Math.Clamp(FaceDisplacement, 0, 1000) : 100;
         if (!double.IsFinite(DistanceFactor) || DistanceFactor < 1) DistanceFactor = 1.75;
         AnimationDurationMs = Math.Clamp(AnimationDurationMs, 0, 5000);
         EnsureDesktopCount = Math.Clamp(EnsureDesktopCount, 0, 20);
@@ -113,9 +117,9 @@ public sealed class CubeSettings
     public static bool TryParseColor(string? text, out (byte R, byte G, byte B) rgb)
     {
         rgb = default;
-        if (text is not { Length: 7 } || text[0] != '#')
+        if (text is not { Length: 7 } || text[0] != '#' || !text.Skip(1).All(char.IsAsciiHexDigit))
         {
-            return false;
+            return false; // HexNumber parsing would also accept spaces
         }
 
         if (!uint.TryParse(text.AsSpan(1), System.Globalization.NumberStyles.HexNumber, null, out var v))

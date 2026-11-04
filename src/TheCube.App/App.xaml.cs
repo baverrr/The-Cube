@@ -7,7 +7,7 @@ using TheCube.Core;
 namespace TheCube.App;
 
 /// <summary>
-/// Tray app: owns the settings, the virtual desktop connection, hotkeys, screen edges and the cube.
+/// Tray app: owns the settings, the virtual desktop connection, hotkeys, screen edges, the taskbar pager and the cube.
 /// Runs until "Quit The Cube" in the tray menu.
 /// </summary>
 public partial class App : Application
@@ -26,6 +26,7 @@ public partial class App : Application
     private HotkeyManager? _hotkeys;
     private KeyboardHook? _keyboardHook;
     private EdgeWatcher? _edges;
+    private PagerManager? _pager;
     private TrayIcon? _tray;
     private SettingsWindow? _settingsWindow;
     private DiagnosticsWindow? _diagnosticsWindow;
@@ -52,6 +53,12 @@ public partial class App : Application
     {
         base.OnStartup(e);
         DispatcherUnhandledException += OnUnhandledException;
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            WriteErrorLog("unobserved task error", e.Exception);
+            e.SetObserved();
+        };
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => WriteErrorLog("fatal error", e.ExceptionObject as Exception);
 
         _singleInstance = new Mutex(initiallyOwned: true, MutexName, out var first);
         if (!first)
@@ -94,11 +101,23 @@ public partial class App : Application
             var windowsDesktops = WindowsVirtualDesktops.Create();
             Desktops = windowsDesktops;
             Images = new DesktopImageProvider(windowsDesktops);
-            DesktopsAdded = DesktopActions.EnsureCount(Desktops, Settings.EnsureDesktopCount);
         }
         catch (VirtualDesktopsUnsupportedException ex)
         {
             StartupError = ex.Message;
+        }
+
+        if (Desktops is not null)
+        {
+            try
+            {
+                DesktopsAdded = DesktopActions.EnsureCount(Desktops, Settings.EnsureDesktopCount);
+            }
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidCastException)
+            {
+                // Not fatal: the cube still works with the desktops there are.
+                StartupError = "Couldn't add virtual desktops: " + ex.Message;
+            }
         }
 
         var (build, revision) = NativeMethods.GetWindowsBuild();
@@ -114,6 +133,8 @@ public partial class App : Application
             }
         });
         _edges.Configure(Settings.BorderActivate);
+        _pager = new PagerManager(this);
+        _pager.Configure(Settings.ShowPager);
         RegisterHotkeys();
         TryApplyStartWithWindows();
 
@@ -131,7 +152,7 @@ public partial class App : Application
         }
     }
 
-    /// <summary>Apply edited settings: save, re-register hotkeys, update edges and start-up. Returns an error to show, or null.</summary>
+    /// <summary>Apply edited settings: save, re-register hotkeys, update edges, the pager and start-up, and add desktops if needed. Returns an error to show, or null.</summary>
     internal string? ApplySettings(CubeSettings settings)
     {
         try
@@ -146,6 +167,7 @@ public partial class App : Application
         Settings = settings;
         RegisterHotkeys();
         _edges?.Configure(Settings.BorderActivate);
+        _pager?.Configure(Settings.ShowPager);
         TryApplyStartWithWindows();
         if (Desktops is not null)
         {
@@ -153,7 +175,7 @@ public partial class App : Application
             {
                 DesktopActions.EnsureCount(Desktops, Settings.EnsureDesktopCount);
             }
-            catch (System.Runtime.InteropServices.COMException ex)
+            catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidCastException)
             {
                 ReportStatus("Couldn't add desktops: " + ex.Message);
             }
@@ -254,7 +276,19 @@ public partial class App : Application
         EventLog.Write($"hotkeys: via keyboard hook=[{string.Join(", ", HookedHotkeys)}] problems=[{string.Join(" | ", HotkeyProblems)}]");
     }
 
-    internal void ReportStatus(string message) => Status?.Invoke(message);
+    /// <summary>Log a status message and show it in the Diagnostics window if that's open.</summary>
+    internal void ReportStatus(string message)
+    {
+        EventLog.Write("status: " + message);
+        Status?.Invoke(message);
+    }
+
+    /// <summary>Report a failure the user caused directly (a hotkey or pager click): log it and show a tray balloon.</summary>
+    internal void ReportFailure(string message)
+    {
+        ReportStatus(message);
+        _tray?.ShowBalloon("The Cube", message);
+    }
 
     private void SwitchFromHotkey(int index)
     {
@@ -271,9 +305,9 @@ public partial class App : Application
                 ReportStatus($"Switched to desktop {index + 1}");
             }
         }
-        catch (System.Runtime.InteropServices.COMException ex)
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidCastException)
         {
-            ReportStatus("Couldn't switch desktop: " + ex.Message);
+            ReportFailure("Couldn't switch desktop: " + ex.Message);
         }
     }
 
@@ -309,28 +343,53 @@ public partial class App : Application
         _diagnosticsWindow.Activate();
     }
 
+    private bool _showingError;
+    private DateTime _lastErrorBox = DateTime.MinValue;
+
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         e.Handled = true;
+        WriteErrorLog("unhandled error", e.Exception);
+
+        // A failing timer would otherwise stack up a new box every tick (the box runs a nested message loop).
+        if (_showingError || DateTime.UtcNow - _lastErrorBox < TimeSpan.FromSeconds(30))
+        {
+            return;
+        }
+
+        _showingError = true;
+        try
+        {
+            MessageBox.Show(e.Exception.Message + "\n\nDetails were written to error.log in " + SettingsDirectory,
+                "The Cube — unexpected error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _showingError = false;
+            _lastErrorBox = DateTime.UtcNow;
+        }
+    }
+
+    private static void WriteErrorLog(string what, Exception? ex)
+    {
         try
         {
             Directory.CreateDirectory(SettingsDirectory);
-            File.AppendAllText(Path.Combine(SettingsDirectory, "error.log"), $"{DateTime.Now:u} {e.Exception}\n\n");
-            EventLog.Write("unhandled error: " + e.Exception.Message);
+            File.AppendAllText(Path.Combine(SettingsDirectory, "error.log"), $"{DateTime.Now:u} {what}: {ex}\n\n");
         }
-        catch (IOException)
+        catch (Exception logEx) when (logEx is IOException or UnauthorizedAccessException)
         {
-            // Nowhere to log; the message box below still shows it.
+            // Nowhere to log.
         }
 
-        MessageBox.Show(e.Exception.Message + "\n\nDetails were written to error.log in " + SettingsDirectory,
-            "The Cube — unexpected error", MessageBoxButton.OK, MessageBoxImage.Error);
+        EventLog.Write($"{what}: {ex?.GetType().Name}: {ex?.Message}");
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         _tray?.Dispose();
         _edges?.Dispose();
+        _pager?.Dispose();
         UnregisterHotkeys();
         _showWait?.Unregister(null);
         _showEvent?.Dispose();

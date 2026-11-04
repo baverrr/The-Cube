@@ -21,6 +21,7 @@ internal sealed class CubeSession
     private int _hiddenCount;
     private nint _previousForeground;
     private int _generation;
+    private int _openSequence;
     private bool _opening;
     private double _openedAt = double.NegativeInfinity;
     private double _closingSince = double.NaN;
@@ -98,10 +99,13 @@ internal sealed class CubeSession
         overlay.Focus();
     }
 
-    /// <param name="previousForeground">Window to give focus back to on Esc; by default the current foreground window.</param>
+    /// <param name="previousForeground">Window to give focus back to when the cube closes without switching; by default the current foreground window.</param>
+    /// <remarks>Started fire-and-forget, so it must never throw: failures are logged and reported here.</remarks>
     private async Task OpenAsync(nint? previousForeground = null)
     {
         _opening = true;
+        var token = ++_openSequence;
+        var startGeneration = _generation;
         try
         {
             await OpenCoreAsync(previousForeground);
@@ -109,12 +113,20 @@ internal sealed class CubeSession
         catch (Exception ex)
         {
             EventLog.Write("open failed: " + ex);
-            CloseOverlays();
-            throw;
+            _app.ReportFailure("The cube couldn't open: " + ex.Message);
+
+            // Only this open's cube: OpenCoreAsync bumps the generation once, CloseOverlays bumps it again.
+            if (token == _openSequence && _generation <= startGeneration + 1)
+            {
+                CloseOverlays();
+            }
         }
         finally
         {
-            _opening = false;
+            if (token == _openSequence)
+            {
+                _opening = false; // a newer open owns the flag otherwise
+            }
         }
     }
 
@@ -152,8 +164,8 @@ internal sealed class CubeSession
         var screens = DesktopImageProvider.CaptureScreens(monitors);
         EventLog.Write($"open: desktops={count} current={current + 1} monitors={monitors.Count} foreground={EventLog.ForegroundWindow()}");
 
-        // Create and start every monitor's cube before showing any, so a focus change while windows
-        // appear can't close some cubes while others are still being made.
+        // Create and start every monitor's cube before showing any, so all of them are in _overlays
+        // before focus can move and OnAppDeactivated runs.
         var created = new List<CubeOverlay>();
         foreach (var monitor in monitors)
         {
@@ -202,9 +214,10 @@ internal sealed class CubeSession
         {
             scenes = await images.BuildAsync(monitors, screens);
         }
-        catch (Exception ex) when (ex is COMException or InvalidCastException)
+        catch (Exception ex)
         {
-            EventLog.Write("capture failed: " + ex.Message);
+            // The cube still works with placeholder faces; don't close it over a capture problem.
+            EventLog.Write("capture failed: " + ex);
             _app.ReportStatus("Couldn't capture the other desktops: " + ex.Message);
             return;
         }
@@ -301,7 +314,7 @@ internal sealed class CubeSession
         }
         catch (Exception ex) when (ex is COMException or InvalidCastException)
         {
-            _app.ReportStatus("Couldn't add a desktop: " + ex.Message);
+            _app.ReportFailure("Couldn't add a desktop: " + ex.Message);
             return;
         }
 

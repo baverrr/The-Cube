@@ -23,7 +23,7 @@ code is copied.
 | Background `#212427` or a skybox image | same |
 | Optional screen-edge activation | same (off by default) |
 | Each monitor shows its own part of every desktop | same |
-| Live window thumbnails on every face | current desktop: live grab; others: per-window `PrintWindow` composite, falling back to the last snapshot |
+| Live window thumbnails on every face | current desktop: live grab; others: per-window `PrintWindow` composite, falling back to each window's last good image |
 
 ## Phases
 
@@ -34,19 +34,19 @@ code is copied.
    undocumented internal interfaces, with a GUID table per Windows build (10 22H2, 11 23H2/24H2/25H2)
    and a clear "unsupported build" message instead of a crash. Also done: Ctrl+F1..F4 hotkeys,
    adding desktops up to `EnsureDesktopCount`, reconnecting after an Explorer restart, focusing the
-   top window after a switch, and a temporary diagnostics window. Change notifications are polled
+   top window after a switch, and a diagnostics window. Change notifications are polled
    instead of using a further undocumented interface. The cube now switches desktops only when its
    zoom-in finishes, because the overlay lives on the old desktop and would vanish mid-animation.
 3. **Desktop images** ✅ — capture the current desktop per monitor before the overlay shows; compose
    other desktops from their wallpaper (per-desktop on Windows 11, else per monitor via the documented
    `IDesktopWallpaper`, honouring fill/fit/stretch/center/tile/span), the taskbar and `PrintWindow`
    window images in z-order, on worker threads. Windows that come back blank fall back to their last
-   good image (per-window cache, keyed by size). Per-monitor DPI aware. Temporary preview window.
+   good image (per-window cache, keyed by size). Per-monitor DPI aware. Preview window (Diagnostics → Preview desktop images).
 4. **Cube overlay** ✅ — borderless top-most window per monitor, WPF `Viewport3D` cube (vertical 60° FOV
    converted to WPF's horizontal FOV), hit testing, keyboard, drag, wheel, placeholder view.
    Also done: one cube per monitor that close together onto the picked desktop
    (`CubeController.Closing`/`CloseTo`); the switch happens after every overlay finishes; focus goes back
-   to the previous window on Esc; the cube closes if The Cube loses focus; other faces fill in once
+   to the previous window on Esc; focus is taken back if Windows grabs it while the cube opens; other faces fill in once
    captured; approximate panorama skybox.
 5. **App shell** ✅ — tray icon + menu (open cube, settings, start with Windows, quit), global hotkeys
    (`RegisterHotKey`, low-level hook fallback when Windows already owns Win+C), screen edges,
@@ -54,5 +54,9 @@ code is copied.
    Also done: running again opens Settings; error.log; the Start menu is kept from opening when the hook
    swallows Win+C; the cube is forced to the front when the trigger input didn't come to The Cube; edges
    are ignored over full-screen apps.
-6. **Release** — README with real screenshots from a Windows PC, installer or portable exe via
-   GitHub Releases, security review, public repo `baverrr/The-Cube`.
+6. **Windows test and release** — tested on Windows 11: the cube, controls, switching, Ctrl+F1–F4, tray,
+   settings and multiple monitors work. Fixed after testing: the cube retracting just after it opened and
+   then ignoring Win+C, the opening flicker, and other faces showing the old static wallpaper when an
+   animated-wallpaper app (Lively) is in use. Added at the user's request: a Plasma-style desktop pager on
+   every taskbar, just left of Start. Still to do: README with real screenshots from a Windows PC, installer or portable exe via
+   GitHub Releases, security review.

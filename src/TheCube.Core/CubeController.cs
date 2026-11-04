@@ -136,7 +136,7 @@ public sealed class CubeController
 
     /// <summary>
     /// Close by zooming into <paramref name="desktop"/> without requesting a switch: another monitor's
-    /// cube asked for it (or the desktop changed underneath).
+    /// cube asked for it.
     /// </summary>
     public void CloseTo(int desktop, double now)
     {

@@ -128,8 +128,9 @@ internal sealed record WallpaperSettings(
                 Marshal.ReleaseComObject(wallpaper);
             }
         }
-        catch (COMException)
+        catch (Exception ex) when (ex is COMException or InvalidCastException)
         {
+            EventLog.Write($"wallpaper: couldn't read the wallpaper settings: {ex.GetType().Name} 0x{ex.HResult:X8}");
             return new WallpaperSettings(WallpaperPosition.Fill, System.Windows.Media.Colors.Black, new Dictionary<PixelRect, string>(), fallback);
         }
     }

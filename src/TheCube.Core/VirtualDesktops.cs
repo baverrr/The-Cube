@@ -54,7 +54,7 @@ public static class DesktopApiSelector
 
     public static string Describe(DesktopApiVersion version) => version switch
     {
-        DesktopApiVersion.Windows10 => "Windows 10 22H2",
+        DesktopApiVersion.Windows10 => "Windows 10 21H2/22H2",
         DesktopApiVersion.Windows11 => "Windows 11 22H2/23H2",
         DesktopApiVersion.Windows11_24H2 => "Windows 11 24H2/25H2",
         _ => "unsupported",

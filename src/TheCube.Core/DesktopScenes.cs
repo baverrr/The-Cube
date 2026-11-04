@@ -71,6 +71,15 @@ public static class WallpaperLayout
 
             case WallpaperPosition.Tile:
             {
+                // A tiny pattern would mean tens of thousands of drawings per face; draw it stretched instead.
+                const long MaxTiles = 1024;
+                var across = (monitor.Width + imageWidth - 1) / imageWidth;
+                var down = (monitor.Height + imageHeight - 1) / imageHeight;
+                if ((long)across * down > MaxTiles)
+                {
+                    return [new PixelRect(0, 0, monitor.Width, monitor.Height)];
+                }
+
                 var tiles = new List<PixelRect>();
                 for (var y = 0; y < monitor.Height; y += imageHeight)
                 {

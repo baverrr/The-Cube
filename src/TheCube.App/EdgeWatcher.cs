@@ -72,7 +72,8 @@ internal sealed class EdgeWatcher : IDisposable
         }
     }
 
-    private static bool FullScreenAppInFront(MonitorInfo monitor)
+    /// <summary>A full-screen app (game, video) covers this monitor; the taskbar is hidden then too.</summary>
+    internal static bool FullScreenAppInFront(MonitorInfo monitor)
     {
         var hwnd = GetForegroundWindow();
         if (hwnd == 0)

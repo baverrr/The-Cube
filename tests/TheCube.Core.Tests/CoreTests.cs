@@ -489,6 +489,10 @@ public class SceneTests
         Assert.Equal(10 * 6, WallpaperLayout.Place(WallpaperPosition.Tile, 200, 200, Monitor, Monitor).Count);
 
     [Fact]
+    public void TinyTilesAreStretchedInsteadOfDrawnThousandsOfTimes() =>
+        Assert.Single(WallpaperLayout.Place(WallpaperPosition.Tile, 8, 8, Monitor, Monitor));
+
+    [Fact]
     public void SpanShowsThisMonitorsPart()
     {
         var right = new PixelRect(1920, 0, 1920, 1080);
@@ -604,5 +608,208 @@ public class ScreenEdgeTests
         Assert.Null(t.Update(ScreenEdge.TopLeft, 140));
         Assert.Null(t.Update(ScreenEdge.TopLeft, 200));
         Assert.Equal(ScreenEdge.TopLeft, t.Update(ScreenEdge.TopLeft, 300));
+    }
+}
+
+public class PagerTests
+{
+    private static readonly PixelRect Taskbar = new(0, 1032, 1920, 48);
+
+    [Fact]
+    public void Sits_just_left_of_the_start_button()
+    {
+        var start = new PixelRect(800, 1036, 40, 40);
+        var r = Pager.Place(Taskbar, start, null, 4, 16.0 / 9)!.Value;
+        Assert.Equal(start.X - 12, r.Right); // gap = 0.25 × 48
+        Assert.Equal(1032 + 8, r.Y);         // padding = 0.16 × 48 ≈ 8
+        Assert.Equal(32, r.Height);
+    }
+
+    [Fact]
+    public void Falls_back_to_the_left_of_the_tray_when_start_is_at_the_far_left()
+    {
+        var start = new PixelRect(10, 1036, 40, 40);
+        var tray = new PixelRect(1700, 1032, 220, 48);
+        var r = Pager.Place(Taskbar, start, tray, 4, 16.0 / 9)!.Value;
+        Assert.Equal(1700 - 12, r.Right);
+    }
+
+    [Fact]
+    public void Uses_the_right_end_without_a_tray()
+    {
+        var r = Pager.Place(Taskbar, null, null, 4, 16.0 / 9)!.Value;
+        Assert.Equal(1920 - 12, r.Right);
+    }
+
+    [Fact]
+    public void Not_on_a_vertical_taskbar()
+    {
+        Assert.Null(Pager.Place(new PixelRect(0, 0, 48, 1080), null, null, 4, 16.0 / 9));
+        Assert.Null(Pager.Place(Taskbar, null, null, 0, 16.0 / 9));
+    }
+
+    [Fact]
+    public void Boxes_fill_the_width_left_to_right()
+    {
+        var height = 32.0;
+        var width = Pager.Width(4, height, 16.0 / 9);
+        var boxes = Pager.Boxes(4, width, height);
+        Assert.Equal(4, boxes.Count);
+        Assert.Equal(0, boxes[0].X, 6);
+        Assert.Equal(width, boxes[3].Right, 6);
+        Assert.Equal(height * 16 / 9, boxes[0].Width, 6);
+        Assert.True(boxes[1].X > boxes[0].Right);
+    }
+
+    [Fact]
+    public void Finds_the_box_under_the_mouse()
+    {
+        var boxes = Pager.Boxes(2, 100, 20);
+        Assert.Equal(0, Pager.BoxAt(boxes, 1, 1));
+        Assert.Equal(1, Pager.BoxAt(boxes, 99, 19));
+        Assert.Null(Pager.BoxAt(boxes, 50, 10)); // the gap
+        Assert.Null(Pager.BoxAt(boxes, 50, 30));
+    }
+
+    [Fact]
+    public void Window_outlines_scale_from_the_monitor()
+    {
+        var monitor = new PixelRect(1920, 0, 1920, 1080);
+        var box = new BoxRect(10, 0, 192, 108);
+        var mini = Pager.MiniWindow(new PixelRect(1920 + 960, 540, 960, 540), monitor, box)!.Value;
+        Assert.Equal(10 + 96, mini.X, 6);
+        Assert.Equal(54, mini.Y, 6);
+        Assert.Equal(96, mini.Width, 6);
+        Assert.Equal(54, mini.Height, 6);
+        Assert.Null(Pager.MiniWindow(new PixelRect(0, 0, 100, 100), monitor, box));
+    }
+
+    [Theory]
+    [InlineData(0, -120, 1)]
+    [InlineData(3, -120, 0)]
+    [InlineData(0, 120, 3)]
+    [InlineData(2, 120, 1)]
+    [InlineData(2, 0, 2)]
+    public void Wheel_steps_and_wraps(int current, int delta, int expected) =>
+        Assert.Equal(expected, Pager.Wheel(current, 4, delta));
+}
+
+public class ReviewFollowUpTests
+{
+    [Theory]
+    [InlineData("#12345 ")]
+    [InlineData("# 12345")]
+    [InlineData("#12G456")]
+    [InlineData("212427")]
+    public void Colours_must_be_exactly_hash_and_six_hex_digits(string text) =>
+        Assert.False(CubeSettings.TryParseColor(text, out _));
+
+    [Fact]
+    public void Colour_parses_to_its_components()
+    {
+        Assert.True(CubeSettings.TryParseColor("#212427", out var rgb));
+        Assert.Equal(((byte)0x21, (byte)0x24, (byte)0x27), rgb);
+    }
+
+    [Theory]
+    [InlineData(-5000, 0)]
+    [InlineData(5000, 1000)]
+    [InlineData(double.NaN, 100)]
+    public void Face_displacement_is_kept_in_range(double value, double expected)
+    {
+        var s = new CubeSettings { FaceDisplacement = value };
+        s.Normalize();
+        Assert.Equal(expected, s.FaceDisplacement);
+    }
+
+    [Fact]
+    public void Lowercase_hotkeys_map_to_letter_keys_not_numpad()
+    {
+        Assert.True(Hotkey.TryParse("ctrl+c", out var h));
+        Assert.Equal(0x43u, (uint)h.VirtualKey);
+    }
+
+    [Fact]
+    public void Malformed_settings_file_throws_json_exception()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"thecube-test-{Guid.NewGuid():N}.json");
+        File.WriteAllText(path, "{ not json");
+        try
+        {
+            Assert.ThrowsAny<System.Text.Json.JsonException>(() => CubeSettings.Load(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Pager_never_covers_the_tray()
+    {
+        var taskbar = new PixelRect(0, 1032, 1920, 48);
+        var start = new PixelRect(1800, 1036, 40, 40);
+        var tray = new PixelRect(1700, 1032, 220, 48);
+        var r = Pager.Place(taskbar, start, tray, 4, 16.0 / 9);
+        Assert.True(r is null || (!r.Value.IntersectsWith(tray) && !r.Value.IntersectsWith(start)));
+    }
+
+    [Fact]
+    public void Animation_with_zero_duration_jumps_to_the_target()
+    {
+        var a = new Animation<double>(0, 0, (x, y, t) => x + (y - x) * t);
+        a.AnimateTo(10, 0);
+        a.Update(0);
+        Assert.Equal(10, a.Value);
+        Assert.False(a.Running);
+    }
+
+    [Fact]
+    public void Animation_lands_exactly_on_the_target_at_the_end()
+    {
+        var a = new Animation<double>(0, 100, (x, y, t) => x + (y - x) * t);
+        a.AnimateTo(10, 0);
+        a.Update(50);
+        Assert.InRange(a.Value, 0.1, 9.9);
+        a.Update(150);
+        Assert.Equal(10, a.Value);
+        Assert.False(a.Running);
+    }
+
+    [Fact]
+    public void Closing_cascade_across_monitors_switches_once_and_hides_each_once()
+    {
+        var settings = new CubeSettings { AnimationDurationMs = 500 };
+        var cubes = Enumerable.Range(0, 3).Select(_ => new CubeController(settings)).ToList();
+        var closing = new int[3];
+        var hidden = new int[3];
+        var switches = new List<int>();
+        for (var i = 0; i < 3; i++)
+        {
+            var me = i;
+            cubes[i].Closing += d =>
+            {
+                closing[me]++;
+                foreach (var other in cubes.Where((_, j) => j != me))
+                {
+                    other.CloseTo(d, 600);
+                }
+            };
+            cubes[i].Hidden += () => hidden[me]++;
+            cubes[i].SwitchRequested += switches.Add;
+            cubes[i].Activate(0, 4, 1920, 1080, 0);
+            cubes[i].Tick(0.016, 600);
+        }
+
+        cubes[1].SwitchTo(2, 600);
+        foreach (var c in cubes)
+        {
+            c.Tick(0.016, 1200);
+            c.Tick(0.016, 1300);
+        }
+
+        Assert.Equal([1, 1, 1], closing);
+        Assert.Equal([1, 1, 1], hidden);
+        Assert.Equal([2], switches);
     }
 }

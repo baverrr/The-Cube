@@ -397,8 +397,9 @@ internal sealed class CubeOverlay : Window
             image.Freeze();
             return image;
         }
-        catch (Exception ex) when (ex is System.IO.IOException or NotSupportedException or System.IO.FileFormatException or UriFormatException)
+        catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException or NotSupportedException or System.IO.FileFormatException or UriFormatException or COMException)
         {
+            EventLog.Write($"skybox: couldn't load {System.IO.Path.GetFileName(path)}: {ex.GetType().Name}: {ex.Message}");
             return null;
         }
     }

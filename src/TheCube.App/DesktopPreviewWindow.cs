@@ -7,8 +7,8 @@ using TheCube.App.Interop;
 namespace TheCube.App;
 
 /// <summary>
-/// Temporary test window: shows the picture The Cube would put on each face (one row per monitor,
-/// one column per desktop), with how each was made. Lets phase 3 be checked before the cube exists.
+/// Shows the picture The Cube would put on each face (one row per monitor, one column per desktop) and
+/// how each was made, for checking capture on a user's PC (Diagnostics → Preview desktop images).
 /// </summary>
 internal sealed class DesktopPreviewWindow : Window
 {
@@ -29,7 +29,7 @@ internal sealed class DesktopPreviewWindow : Window
         Foreground = Brushes.WhiteSmoke;
 
         var refresh = new Button { Content = "Capture again", Padding = new Thickness(10, 3, 10, 3), HorizontalAlignment = HorizontalAlignment.Left };
-        refresh.Click += async (_, _) => await CaptureAsync();
+        refresh.Click += async (_, _) => await SafeCaptureAsync();
 
         var root = new StackPanel { Margin = new Thickness(16) };
         root.Children.Add(refresh);
@@ -43,7 +43,21 @@ internal sealed class DesktopPreviewWindow : Window
         });
         root.Children.Add(_status);
         Content = root;
-        Loaded += async (_, _) => await CaptureAsync();
+        Loaded += async (_, _) => await SafeCaptureAsync();
+    }
+
+    private async Task SafeCaptureAsync()
+    {
+        try
+        {
+            await CaptureAsync();
+        }
+        catch (Exception ex)
+        {
+            EventLog.Write("preview: capture failed: " + ex);
+            _status.Text = "Capture failed: " + ex.Message;
+            Show();
+        }
     }
 
     private async Task CaptureAsync()
@@ -81,7 +95,7 @@ internal sealed class DesktopPreviewWindow : Window
                 var caption = scene.IsCurrent
                     ? $"Desktop {scene.Desktop + 1} · current (screen grab)"
                     : $"Desktop {scene.Desktop + 1} · {live} live, {cached} cached, {scene.MissingWindows} missing" +
-                      (scene.Wallpaper is null ? " · no wallpaper" : "");
+                      (scene.HasLiveWallpaper ? " · live wallpaper" : scene.Wallpaper is null ? " · no wallpaper" : "");
 
                 var cell = new StackPanel { Margin = new Thickness(0, 0, 12, 0) };
                 cell.Children.Add(new Border

@@ -38,8 +38,8 @@ internal sealed class WindowsVirtualDesktops : IVirtualDesktopService
         if (version == DesktopApiVersion.Unsupported)
         {
             throw new VirtualDesktopsUnsupportedException(
-                $"Windows build {build}.{revision} isn't supported. The Cube supports Windows 10 22H2 (19045) " +
-                "and Windows 11 23H2 (22631), 24H2 and 25H2 (26100+).");
+                $"Windows build {build}.{revision} isn't supported. The Cube supports Windows 10 21H2/22H2 (19044–19045) " +
+                "and Windows 11 22H2/23H2 (22621–22631), 24H2 and 25H2 (26100+).");
         }
 
         try
@@ -82,6 +82,7 @@ internal sealed class WindowsVirtualDesktops : IVirtualDesktopService
         catch (COMException ex) when (ex.HResult is RPC_E_DISCONNECTED or RPC_S_SERVER_UNAVAILABLE or RPC_S_CALL_FAILED)
         {
             // Explorer restarted: its COM objects are gone. Reconnect once and retry.
+            EventLog.Write($"desktops: reconnecting after 0x{ex.HResult:X8}");
             (_api, _manager) = Connect(_version);
             return action(_api);
         }
@@ -107,9 +108,9 @@ internal sealed class WindowsVirtualDesktops : IVirtualDesktopService
                 var id = _manager.GetWindowDesktopId(hwnd);
                 result[hwnd] = id == Guid.Empty ? null : byId.TryGetValue(id, out var index) ? index : -1;
             }
-            catch (COMException)
+            catch (Exception ex) when (ex is COMException or ArgumentException or UnauthorizedAccessException)
             {
-                result[hwnd] = null;
+                result[hwnd] = null; // e.g. the window closed meanwhile
             }
         }
 

@@ -23,7 +23,7 @@ public sealed class Animation<T>(T initial, double durationMs, Func<T, T, double
     public T Value { get; private set; } = initial;
     public T Target => _to;
     public bool Running { get; private set; }
-    public double DurationMs { get; set; } = durationMs;
+    public double DurationMs { get; } = durationMs;
 
     /// <summary>Jump to <paramref name="value"/> and stop any running animation.</summary>
     public void Set(T value)

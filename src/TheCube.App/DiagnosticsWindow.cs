@@ -9,8 +9,8 @@ using TheCube.Core;
 namespace TheCube.App;
 
 /// <summary>
-/// Temporary window for testing the virtual desktop layer on real Windows before the cube and tray
-/// exist: shows the build, interface set, desktops and hotkey status, and can switch or add desktops.
+/// Diagnostics (tray → Diagnostics…, or shown at start-up when something's wrong): Windows build, interface
+/// set, hotkey status, a live desktop list, switch/add buttons, the desktop image preview and the log.
 /// </summary>
 internal sealed class DiagnosticsWindow : Window
 {
