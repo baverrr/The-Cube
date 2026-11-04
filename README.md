@@ -13,11 +13,17 @@ Press **Win+C**, spin the cube, and click a face to jump to that desktop.
 > pager just left of the Start button.
 
 > [!WARNING]
-> **Nearly done.** The cube, hotkeys, tray, settings and multiple monitors have been tested on Windows 11.
-> The taskbar pager and animated-wallpaper support are new and not tested yet. Screenshots and a release
-> come next. See [PLAN.md](PLAN.md).
+> **Early release.** Everything has been tested on Windows 11 (cube, hotkeys, tray, settings, multiple
+> monitors, the taskbar pager and animated wallpapers), but only on one PC so far. See [PLAN.md](PLAN.md).
 
-Screenshots from a Windows PC are coming with the first release.
+<p align="center">
+  <img src="docs/images/cube-windows.jpg" alt="The cube open on one monitor, showing a desktop with a File Explorer window on its front face" width="49%">
+  <img src="docs/images/cube-rotating.jpg" alt="The cube turned between two desktop faces" width="49%">
+</p>
+<p align="center">
+  <img src="docs/images/cube-front.jpg" alt="The cube on a second monitor, zoomed out from the current desktop" width="49%">
+  <img src="docs/images/settings.png" alt="The Settings window: start-up, pager, desktop count, shortcuts, cube colour and screen edges" width="35%">
+</p>
 
 The Cube switches desktops through Windows interfaces that Microsoft doesn't document, and those
 can change between Windows builds. On a build it doesn't recognise, The Cube shows a message
