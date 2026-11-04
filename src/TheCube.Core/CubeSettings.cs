@@ -56,6 +56,9 @@ public sealed class CubeSettings
     /// <summary>Create Windows virtual desktops at start-up until there are at least this many (0 = leave alone).</summary>
     public int EnsureDesktopCount { get; set; } = 4;
 
+    /// <summary>Start The Cube when you sign in to Windows (like an always-on KWin effect).</summary>
+    public bool StartWithWindows { get; set; } = true;
+
     public string ToggleCubeHotkey { get; set; } = "Win+C";
 
     /// <summary>Hotkeys that jump straight to desktop 1, 2, 3, ... Empty strings are unbound.</summary>
@@ -81,6 +84,10 @@ public sealed class CubeSettings
         settings.Normalize();
         return settings;
     }
+
+    /// <summary>Deep copy (for editing in a dialog that can be cancelled).</summary>
+    public CubeSettings Clone() =>
+        JsonSerializer.Deserialize<CubeSettings>(JsonSerializer.Serialize(this, JsonOptions), JsonOptions)!;
 
     public void Save(string path)
     {

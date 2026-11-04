@@ -22,6 +22,7 @@ internal sealed class DesktopPreviewWindow : Window
     {
         _images = images;
         Title = "The Cube — desktop images";
+        Icon = AppIcon.ForWindow();
         SizeToContent = SizeToContent.WidthAndHeight;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Background = new SolidColorBrush(Color.FromRgb(0x21, 0x24, 0x27));

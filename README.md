@@ -12,9 +12,8 @@ Press **Win+C**, spin the cube, and click a face to jump to that desktop.
 > **Win+C** opens and closes the cube. **Ctrl+F1–F4** jump straight to desktops 1–4.
 
 > [!WARNING]
-> **Work in progress.** Phases 1–4 of 6 are done: the cube works, but hasn't been tested on Windows yet.
-> The tray icon, settings window and Win+C fallback come next. Until then the app opens a diagnostics
-> window, described in [Testing the current build](#testing-the-current-build). See [PLAN.md](PLAN.md).
+> **Work in progress.** Phases 1–5 of 6 are done, but nothing has been tested on real Windows yet.
+> Phase 6 is that test, with fixes, screenshots and a release. See [PLAN.md](PLAN.md).
 
 Screenshots will be added once the cube runs on Windows (phase 6).
 
@@ -29,6 +28,7 @@ instead of switching.
 - [Using it](#using-it)
 - [Testing the current build](#testing-the-current-build)
 - [Settings](#settings)
+- [Troubleshooting](#troubleshooting)
 - [How it works](#how-it-works)
 - [Project layout](#project-layout)
 - [Development](#development)
@@ -38,7 +38,9 @@ instead of switching.
 ## Quick start
 
 1. **Download** `TheCube.exe` from the latest CI run or release (Windows 10 22H2, or Windows 11 23H2, 24H2 or 25H2; x64). It's a single self-contained file, so you don't need to install .NET.
-2. **Run it.** It sits in the system tray and makes sure you have at least 4 virtual desktops.
+2. **Run it.** If SmartScreen warns about an unsigned app, choose **More info → Run anyway**. The Cube
+   then sits in the notification area (tray), adds virtual desktops until you have 4, and starts with
+   Windows from then on. You can turn that off in the tray menu.
 3. **Press Win+C.**
 
 To build it yourself, see [Development](#development).
@@ -67,17 +69,22 @@ To build it yourself, see [Development](#development).
 | **Esc** | Close without switching |
 | Switching to another app (e.g. the Start menu) | Closes the cube |
 
+**Tray icon:** left-click opens the cube. Right-click for **Open cube**, **Settings…**, **Diagnostics…**,
+**Start with Windows** and **Quit The Cube**. Starting `TheCube.exe` again while it's already running opens
+Settings.
+
 > Ctrl+F4 normally closes a tab or document in many Windows apps. The Cube takes it over by default
 > to match the Plasma set-up. Change `SwitchToDesktopHotkeys` if you want it back.
 
 ## Testing the current build
 
-Until the tray icon is built, `TheCube.exe` opens a **diagnostics window**, and closing it quits The Cube. It shows:
+**Diagnostics…** in the tray menu opens a window for checking The Cube on your PC. It also opens
+by itself at start-up if something's wrong. It shows:
 
 - your Windows build and which set of desktop interfaces The Cube picked for it
-- whether each hotkey was registered, and why not if it wasn't
+- whether each hotkey was registered, which ones fall back to the keyboard hook, and why any couldn't be set up
 - your desktops, with ▶ marking the current one. This updates live when you switch with Win+Ctrl+←/→.
-- **Open cube** (the same as Win+C), **Switch** buttons, **Add desktop** and **Open settings file**
+- **Open cube** (the same as Win+C), **Switch** buttons, **Add desktop**, **Settings…** and **Open settings file**
 - **Preview desktop images**: the picture each cube face would show, with one row per monitor and one column per desktop. Each one says how it was made:
   - the current desktop is a *screen grab*
   - on other desktops, windows are *live* (captured just now), *cached* (couldn't be captured now, so their last good image is used) or *missing* (never captured)
@@ -91,7 +98,14 @@ choose **More info → Run anyway**.
 
 ## Settings
 
-Settings are stored in `%APPDATA%\The Cube\settings.json`. The defaults match the Plasma set-up this app is modelled on:
+Open **Settings…** from the tray menu. Changes apply as soon as you press **Save**:
+
+- **General:** start with Windows, and how many desktops to keep.
+- **Shortcuts:** click a box and press the keys; Backspace clears it.
+- **Cube:** background colour or skybox, face displacement, distance factor, animation length, and inverted dragging.
+- **Screen edges:** which edges and corners open the cube when the pointer rests on them for 150 ms.
+
+Settings are stored in `%APPDATA%\The Cube\settings.json`, which you can also edit by hand while The Cube isn't running. The defaults match the Plasma set-up this app is modelled on:
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -103,9 +117,22 @@ Settings are stored in `%APPDATA%\The Cube\settings.json`. The defaults match th
 | `SkyBox` | — | Image path for the `SkyBox` background |
 | `BorderActivate` | `[]` | Screen edges that open the cube, e.g. `["TopLeft"]` |
 | `AnimationDurationMs` | `566` | Open, close and rotate animation length |
+| `StartWithWindows` | `true` | Start when you sign in (a per-user `Run` registry entry) |
 | `EnsureDesktopCount` | `4` | Add desktops at start-up until there are this many (`0` = leave alone) |
 | `ToggleCubeHotkey` | `Win+C` | Open/close hotkey |
 | `SwitchToDesktopHotkeys` | `Ctrl+F1`…`Ctrl+F4` | One entry per desktop; `""` = unbound |
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Win+C opens Copilot instead | Windows kept the shortcut. The Cube catches it with a keyboard hook instead; **Diagnostics…** shows whether that's active. If it still doesn't work, choose another shortcut in **Settings…**. |
+| "Windows build … isn't supported" | Your build uses desktop interfaces The Cube doesn't know yet. Please open an issue with the build number from **Diagnostics…**. |
+| Some windows are missing from other desktops' faces | Those apps can't be captured while hidden. Visit that desktop once and they'll appear from then on. |
+| It doesn't start with Windows after moving `TheCube.exe` | The start-up entry points to the old location. Untick and tick **Start with Windows** again. |
+| Something went wrong | Details are in `%APPDATA%\The Cube\error.log`. |
+
+To remove The Cube: untick **Start with Windows**, quit it, delete `TheCube.exe`, and delete `%APPDATA%\The Cube`.
 
 ## How it works
 
@@ -145,6 +172,11 @@ src/TheCube.Core/     Platform-neutral logic: geometry, camera, animation, contr
 src/TheCube.App/      WPF app: start-up, hotkeys, diagnostics window
   CubeSession.cs      Opens a cube on every monitor, keeps them in step, switches desktop at the end
   CubeOverlay.cs      Full-screen window per monitor: 3D cube (Viewport3D), mouse/keyboard input, placeholder
+  TrayIcon.cs         Tray icon and menu, app icon, Start with Windows
+  SettingsWindow.cs   Settings dialog
+  HotkeyManager.cs    Global hotkeys (RegisterHotKey); KeyboardHook.cs is the fallback for ones Windows keeps
+  EdgeWatcher.cs      Screen-edge activation
+  Assets/             Icon (SVG source + .ico)
   DesktopImages.cs    Builds each desktop's picture per monitor; FaceRenderer turns it into a face brush
   Interop/            Virtual desktop COM interfaces (one set per Windows version), screen/window
                       capture, monitors, IDesktopWallpaper, Win32 calls
@@ -180,6 +212,7 @@ dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:Publish
   rather than a true 3D environment.
 - Faces of other desktops fill in a moment after the cube opens; until then they're plain grey.
 - Windows may already use Win+C for Copilot. The Cube then falls back to a keyboard hook, and you can pick another hotkey in settings.
+- Screen edges are ignored while a full-screen app is in front, as in Plasma.
 
 ## License and privacy
 

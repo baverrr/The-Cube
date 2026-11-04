@@ -25,6 +25,7 @@ internal sealed class DiagnosticsWindow : Window
     {
         _app = app;
         Title = "The Cube — diagnostics";
+        Icon = AppIcon.ForWindow();
         Width = 520;
         SizeToContent = SizeToContent.Height;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -53,6 +54,11 @@ internal sealed class DiagnosticsWindow : Window
         var hotkeys = new List<string> { app.Settings.ToggleCubeHotkey };
         hotkeys.AddRange(app.Settings.SwitchToDesktopHotkeys);
         root.Children.Add(Line(string.Join(", ", hotkeys.Where(h => !string.IsNullOrWhiteSpace(h)))));
+        foreach (var hooked in app.HookedHotkeys)
+        {
+            root.Children.Add(Line($"{hooked}: Windows keeps this one, so The Cube catches it with a keyboard hook instead.", Brushes.LightSkyBlue));
+        }
+
         foreach (var problem in app.HotkeyProblems)
         {
             root.Children.Add(Line("Not registered: " + problem, Brushes.Orange));
@@ -71,20 +77,24 @@ internal sealed class DiagnosticsWindow : Window
                 new DesktopPreviewWindow(images) { Owner = this }.Show();
             }
         }));
+        buttons.Children.Add(Button("Settings…", () => _app.ShowSettings()));
         buttons.Children.Add(Button("Open settings file", () => Process.Start(new ProcessStartInfo(App.SettingsPath) { UseShellExecute = true })));
         root.Children.Add(buttons);
 
         root.Children.Add(_status);
         Content = root;
 
-        _app.Status += message => _status.Text = message;
+        _app.Status += OnStatus;
         _poll.Tick += (_, _) => Refresh();
         _poll.Start();
         Refresh();
     }
 
+    private void OnStatus(string message) => _status.Text = message;
+
     protected override void OnClosed(EventArgs e)
     {
+        _app.Status -= OnStatus;
         _poll.Stop();
         base.OnClosed(e);
     }

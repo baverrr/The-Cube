@@ -379,6 +379,18 @@ public class SettingsTests
     }
 
     [Fact]
+    public void CloneIsDeep()
+    {
+        var a = new CubeSettings();
+        var b = a.Clone();
+        b.SwitchToDesktopHotkeys[0] = "Ctrl+F9";
+        b.BorderActivate.Add(ScreenEdge.Top);
+        Assert.Equal("Ctrl+F1", a.SwitchToDesktopHotkeys[0]);
+        Assert.Empty(a.BorderActivate);
+        Assert.Equal(a.DistanceFactor, b.DistanceFactor);
+    }
+
+    [Fact]
     public void MissingFileGivesDefaults() => Assert.Equal(1.75, CubeSettings.Load("/nonexistent/x.json").DistanceFactor);
 }
 
@@ -522,5 +534,61 @@ public class SceneTests
     {
         Assert.Equal(new PixelRect(1800, 0, 120, 400), new PixelRect(1800, 0, 400, 400).Intersect(Monitor));
         Assert.True(new PixelRect(1920, 0, 10, 10).Intersect(Monitor).IsEmpty);
+    }
+}
+
+public class ScreenEdgeTests
+{
+    private static readonly PixelRect Left = new(0, 0, 1920, 1080);
+    private static readonly PixelRect Right = new(1920, 0, 2560, 1440);
+
+    private static bool OnAny(int x, int y) =>
+        (x >= Left.X && x < Left.Right && y >= Left.Y && y < Left.Bottom) ||
+        (x >= Right.X && x < Right.Right && y >= Right.Y && y < Right.Bottom);
+
+    [Theory]
+    [InlineData(0, 0, ScreenEdge.TopLeft)]
+    [InlineData(5, 0, ScreenEdge.TopLeft)]
+    [InlineData(0, 5, ScreenEdge.TopLeft)]
+    [InlineData(500, 0, ScreenEdge.Top)]
+    [InlineData(0, 500, ScreenEdge.Left)]
+    [InlineData(0, 1079, ScreenEdge.BottomLeft)]
+    [InlineData(500, 1079, ScreenEdge.Bottom)]
+    [InlineData(500, 500, null)]
+    [InlineData(1919, 500, null)] // shared with the right-hand monitor
+    public void ClassifiesLeftMonitor(int x, int y, ScreenEdge? expected) =>
+        Assert.Equal(expected, ScreenEdges.Classify(x, y, Left, OnAny));
+
+    [Fact]
+    public void RightMonitorRightEdgeAndLowerLeftEdge()
+    {
+        Assert.Equal(ScreenEdge.Right, ScreenEdges.Classify(4479, 700, Right, OnAny));
+        Assert.Equal(ScreenEdge.TopRight, ScreenEdges.Classify(4479, 0, Right, OnAny));
+        // Below the shorter left monitor, the right monitor's left edge is an outer edge.
+        Assert.Equal(ScreenEdge.Left, ScreenEdges.Classify(1920, 1300, Right, OnAny));
+        Assert.Null(ScreenEdges.Classify(1920, 500, Right, OnAny));
+    }
+
+    [Fact]
+    public void DwellFiresOnceAfterDelay()
+    {
+        var t = new EdgeDwellTracker(150);
+        Assert.Null(t.Update(ScreenEdge.TopLeft, 0));
+        Assert.Null(t.Update(ScreenEdge.TopLeft, 100));
+        Assert.Equal(ScreenEdge.TopLeft, t.Update(ScreenEdge.TopLeft, 160));
+        Assert.Null(t.Update(ScreenEdge.TopLeft, 400));
+        Assert.Null(t.Update(null, 410));
+        Assert.Null(t.Update(ScreenEdge.TopLeft, 420));
+        Assert.Equal(ScreenEdge.TopLeft, t.Update(ScreenEdge.TopLeft, 600));
+    }
+
+    [Fact]
+    public void MovingToAnotherEdgeRestartsDwell()
+    {
+        var t = new EdgeDwellTracker(150);
+        t.Update(ScreenEdge.Top, 0);
+        Assert.Null(t.Update(ScreenEdge.TopLeft, 140));
+        Assert.Null(t.Update(ScreenEdge.TopLeft, 200));
+        Assert.Equal(ScreenEdge.TopLeft, t.Update(ScreenEdge.TopLeft, 300));
     }
 }

@@ -48,8 +48,11 @@ code is copied.
    (`CubeController.Closing`/`CloseTo`); the switch happens after every overlay finishes; focus goes back
    to the previous window on Esc; the cube closes if The Cube loses focus; other faces fill in once
    captured; approximate panorama skybox.
-5. **App shell** — tray icon + menu (open cube, settings, start with Windows, quit), global hotkeys
+5. **App shell** ✅ — tray icon + menu (open cube, settings, start with Windows, quit), global hotkeys
    (`RegisterHotKey`, low-level hook fallback when Windows already owns Win+C), screen edges,
    settings window, single instance, `%APPDATA%\The Cube\settings.json`.
+   Also done: running again opens Settings; error.log; the Start menu is kept from opening when the hook
+   swallows Win+C; the cube is forced to the front when the trigger input didn't come to The Cube; edges
+   are ignored over full-screen apps.
 6. **Release** — README with real screenshots from a Windows PC, installer or portable exe via
    GitHub Releases, security review, public repo `baverrr/The-Cube`.

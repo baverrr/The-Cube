@@ -101,8 +101,12 @@ internal sealed class CubeSession
         // Keyboard goes to the monitor under the pointer, as in Plasma.
         GetCursorPos(out var cursor);
         var focused = _overlays.FirstOrDefault(o => Contains(o.Monitor.Bounds, cursor.X, cursor.Y)) ?? _overlays.FirstOrDefault();
-        focused?.Activate();
-        focused?.Focus();
+        if (focused is not null)
+        {
+            ForceForeground(new System.Windows.Interop.WindowInteropHelper(focused).Handle);
+            focused.Activate();
+            focused.Focus();
+        }
 
         if (count < CubeGeometry.MinimumFaces)
         {
@@ -208,6 +212,44 @@ internal sealed class CubeSession
         CloseOverlays();
         _ = OpenAsync(previous);
     }
+
+    /// <summary>
+    /// Bring our window to the front even when the triggering input went to another app (keyboard-hook
+    /// hotkeys and screen edges), which Windows' foreground rules would otherwise block.
+    /// </summary>
+    private static void ForceForeground(nint hwnd)
+    {
+        var foreground = GetForegroundWindow();
+        var foregroundThread = GetWindowThreadProcessId(foreground, out _);
+        var ourThread = GetCurrentThreadId();
+        var attached = foregroundThread != 0 && foregroundThread != ourThread && AttachThreadInput(ourThread, foregroundThread, true);
+        try
+        {
+            BringWindowToTop(hwnd);
+            SetForegroundWindow(hwnd);
+        }
+        finally
+        {
+            if (attached)
+            {
+                AttachThreadInput(ourThread, foregroundThread, false);
+            }
+        }
+    }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool attach);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(nint hwnd);
 
     private static bool Contains(PixelRect r, int x, int y) => x >= r.X && x < r.Right && y >= r.Y && y < r.Bottom;
 

@@ -10,10 +10,24 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- Only for the tray icon (NotifyIcon); WinForms' global usings are removed below to avoid clashing with WPF names. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Assets\TheCube.ico</ApplicationIcon>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>TheCube</AssemblyName>
     <Product>The Cube</Product>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- WPF app: DPI awareness belongs in the manifest; the WinForms analyzer (used only for the tray icon) assumes a WinForms app. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\TheCube.ico" LogicalName="TheCube.ico" />
+  </ItemGroup>
 
 </Project>

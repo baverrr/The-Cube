@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Isometric cube: three visible faces, like the cube of desktops. -->
+  <g stroke="#0d1b2a" stroke-width="6" stroke-linejoin="round">
+    <polygon points="128,20 228,74 128,128 28,74" fill="#7cc4ff"/>
+    <polygon points="28,74 128,128 128,236 28,182" fill="#2f86d6"/>
+    <polygon points="228,74 128,128 128,236 228,182" fill="#1b5c9e"/>
+  </g>
+  <!-- A window on each face -->
+  <g fill="#ffffff" fill-opacity="0.85">
+    <polygon points="128,48 182,77 128,106 74,77"/>
+    <polygon points="48,108 108,140 108,196 48,164" fill-opacity="0.55"/>
+    <polygon points="148,140 208,108 208,164 148,196" fill-opacity="0.4"/>
+  </g>
+</svg>

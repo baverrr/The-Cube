@@ -6,6 +6,10 @@ using TheCube.Core;
 
 namespace TheCube.App;
 
+/// <summary>
+/// Tray app: owns the settings, the virtual desktop connection, hotkeys, screen edges and the cube.
+/// Runs until "Quit The Cube" in the tray menu.
+/// </summary>
 public partial class App : Application
 {
     public static string SettingsDirectory { get; } =
@@ -13,14 +17,31 @@ public partial class App : Application
 
     public static string SettingsPath => Path.Combine(SettingsDirectory, "settings.json");
 
+    private const string MutexName = @"Local\TheCube.SingleInstance";
+    private const string ShowEventName = @"Local\TheCube.Show";
+
     private Mutex? _singleInstance;
+    private EventWaitHandle? _showEvent;
+    private RegisteredWaitHandle? _showWait;
     private HotkeyManager? _hotkeys;
+    private KeyboardHook? _keyboardHook;
+    private EdgeWatcher? _edges;
+    private TrayIcon? _tray;
+    private SettingsWindow? _settingsWindow;
+    private DiagnosticsWindow? _diagnosticsWindow;
+    private bool _hotkeysSuspended;
 
     internal CubeSettings Settings { get; private set; } = new();
     internal IVirtualDesktopService? Desktops { get; private set; }
     internal DesktopImageProvider? Images { get; private set; }
     internal CubeSession? Cube { get; private set; }
+
+    /// <summary>Hotkeys that couldn't be set up at all.</summary>
     internal List<string> HotkeyProblems { get; } = [];
+
+    /// <summary>Hotkeys handled by the keyboard-hook fallback because Windows wouldn't register them.</summary>
+    internal List<string> HookedHotkeys { get; } = [];
+
     internal string? StartupError { get; private set; }
     internal int DesktopsAdded { get; private set; }
 
@@ -32,18 +53,32 @@ public partial class App : Application
         base.OnStartup(e);
         DispatcherUnhandledException += OnUnhandledException;
 
-        _singleInstance = new Mutex(initiallyOwned: true, @"Local\TheCube.SingleInstance", out var first);
+        _singleInstance = new Mutex(initiallyOwned: true, MutexName, out var first);
         if (!first)
         {
-            MessageBox.Show("The Cube is already running.", "The Cube", MessageBoxButton.OK, MessageBoxImage.Information);
+            // Already running: ask that copy to show its settings, then leave.
+            try
+            {
+                using var show = EventWaitHandle.OpenExisting(ShowEventName);
+                show.Set();
+            }
+            catch (WaitHandleCannotBeOpenedException)
+            {
+                // The other copy is still starting up.
+            }
+
             Shutdown();
             return;
         }
 
+        _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+        _showWait = ThreadPool.RegisterWaitForSingleObject(_showEvent, (_, _) => Dispatcher.BeginInvoke(ShowSettings), null, Timeout.Infinite, executeOnlyOnce: false);
+
+        var firstRun = !File.Exists(SettingsPath);
         try
         {
             Settings = CubeSettings.Load(SettingsPath);
-            if (!File.Exists(SettingsPath))
+            if (firstRun)
             {
                 Settings.Save(SettingsPath); // so there's a file to edit
             }
@@ -67,25 +102,141 @@ public partial class App : Application
         }
 
         Cube = new CubeSession(this);
-        _hotkeys = new HotkeyManager();
+        _edges = new EdgeWatcher(() =>
+        {
+            if (Cube?.IsOpen == false)
+            {
+                Cube.Toggle();
+            }
+        });
+        _edges.Configure(Settings.BorderActivate);
         RegisterHotkeys();
+        TryApplyStartWithWindows();
 
-        MainWindow = new DiagnosticsWindow(this);
-        MainWindow.Show();
+        _tray = new TrayIcon(this);
+
+        var background = e.Args.Contains(StartWithWindows.BackgroundArgument);
+        if (StartupError is not null || HotkeyProblems.Count > 0)
+        {
+            ShowDiagnostics(); // something needs the user's attention
+        }
+        else if (!background)
+        {
+            var hotkey = string.IsNullOrWhiteSpace(Settings.ToggleCubeHotkey) ? "the tray icon" : Settings.ToggleCubeHotkey;
+            _tray.ShowBalloon("The Cube is running", $"Press {hotkey} to open the cube. Right-click the tray icon for settings.");
+        }
+    }
+
+    /// <summary>Apply edited settings: save, re-register hotkeys, update edges and start-up. Returns an error to show, or null.</summary>
+    internal string? ApplySettings(CubeSettings settings)
+    {
+        try
+        {
+            settings.Save(SettingsPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"Couldn't save {SettingsPath}: {ex.Message}";
+        }
+
+        Settings = settings;
+        RegisterHotkeys();
+        _edges?.Configure(Settings.BorderActivate);
+        TryApplyStartWithWindows();
+        if (Desktops is not null)
+        {
+            try
+            {
+                DesktopActions.EnsureCount(Desktops, Settings.EnsureDesktopCount);
+            }
+            catch (System.Runtime.InteropServices.COMException ex)
+            {
+                ReportStatus("Couldn't add desktops: " + ex.Message);
+            }
+        }
+
+        _tray?.Refresh();
+        return HotkeyProblems.Count > 0 ? "Some shortcuts couldn't be set up:\n\n" + string.Join("\n", HotkeyProblems) : null;
+    }
+
+    internal void SetStartWithWindows(bool enabled)
+    {
+        var updated = Settings.Clone();
+        updated.StartWithWindows = enabled;
+        ApplySettings(updated);
+    }
+
+    private void TryApplyStartWithWindows()
+    {
+        try
+        {
+            StartWithWindows.Apply(Settings.StartWithWindows);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+        {
+            ReportStatus("Couldn't change Start with Windows: " + ex.Message);
+        }
+    }
+
+    /// <summary>Turn all shortcuts off while the user records a new one in the settings window.</summary>
+    internal void SuspendHotkeys(bool suspend)
+    {
+        if (suspend == _hotkeysSuspended)
+        {
+            return;
+        }
+
+        _hotkeysSuspended = suspend;
+        if (suspend)
+        {
+            UnregisterHotkeys();
+        }
+        else
+        {
+            RegisterHotkeys();
+        }
+    }
+
+    private void UnregisterHotkeys()
+    {
+        _hotkeys?.Dispose();
+        _hotkeys = null;
+        _keyboardHook?.Dispose();
+        _keyboardHook = null;
     }
 
     private void RegisterHotkeys()
     {
+        UnregisterHotkeys();
+        HotkeyProblems.Clear();
+        HookedHotkeys.Clear();
+        if (_hotkeysSuspended)
+        {
+            return;
+        }
+
+        _hotkeys = new HotkeyManager();
+        _keyboardHook = new KeyboardHook(Dispatcher);
+
         void Add(string text, Action action)
         {
-            if (_hotkeys!.Register(text, action) is { } problem)
+            if (string.IsNullOrWhiteSpace(text) || _hotkeys.Register(text, action) is not { } problem)
+            {
+                return;
+            }
+
+            // Windows (or another app) owns it: take it with the keyboard hook instead.
+            if (Hotkey.TryParse(text, out var hotkey) && _keyboardHook.Add(hotkey, action))
+            {
+                HookedHotkeys.Add(hotkey.ToString());
+            }
+            else
             {
                 HotkeyProblems.Add(problem);
             }
         }
 
         Add(Settings.ToggleCubeHotkey, () => Cube?.Toggle());
-
         for (var i = 0; i < Settings.SwitchToDesktopHotkeys.Count; i++)
         {
             var index = i;
@@ -102,21 +253,75 @@ public partial class App : Application
             return;
         }
 
-        if (DesktopActions.SwitchTo(Desktops, index, animate: true))
+        try
         {
-            Status?.Invoke($"Switched to desktop {index + 1}");
+            if (DesktopActions.SwitchTo(Desktops, index, animate: true))
+            {
+                ReportStatus($"Switched to desktop {index + 1}");
+            }
         }
+        catch (System.Runtime.InteropServices.COMException ex)
+        {
+            ReportStatus("Couldn't switch desktop: " + ex.Message);
+        }
+    }
+
+    internal void ShowSettings()
+    {
+        if (_settingsWindow is { IsLoaded: true })
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        _settingsWindow = new SettingsWindow(this);
+        _settingsWindow.Closed += (_, _) =>
+        {
+            SuspendHotkeys(false);
+            _settingsWindow = null;
+        };
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    }
+
+    internal void ShowDiagnostics()
+    {
+        if (_diagnosticsWindow is { IsLoaded: true })
+        {
+            _diagnosticsWindow.Activate();
+            return;
+        }
+
+        _diagnosticsWindow = new DiagnosticsWindow(this);
+        _diagnosticsWindow.Closed += (_, _) => _diagnosticsWindow = null;
+        _diagnosticsWindow.Show();
+        _diagnosticsWindow.Activate();
     }
 
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         e.Handled = true;
-        MessageBox.Show(e.Exception.ToString(), "The Cube — unexpected error", MessageBoxButton.OK, MessageBoxImage.Error);
+        try
+        {
+            Directory.CreateDirectory(SettingsDirectory);
+            File.AppendAllText(Path.Combine(SettingsDirectory, "error.log"), $"{DateTime.Now:u} {e.Exception}\n\n");
+        }
+        catch (IOException)
+        {
+            // Nowhere to log; the message box below still shows it.
+        }
+
+        MessageBox.Show(e.Exception.Message + "\n\nDetails were written to error.log in " + SettingsDirectory,
+            "The Cube — unexpected error", MessageBoxButton.OK, MessageBoxImage.Error);
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        _hotkeys?.Dispose();
+        _tray?.Dispose();
+        _edges?.Dispose();
+        UnregisterHotkeys();
+        _showWait?.Unregister(null);
+        _showEvent?.Dispose();
         _singleInstance?.Dispose();
         base.OnExit(e);
     }
