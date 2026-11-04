@@ -101,6 +101,10 @@ public partial class App : Application
             StartupError = ex.Message;
         }
 
+        var (build, revision) = NativeMethods.GetWindowsBuild();
+        EventLog.Write($"started: The Cube {typeof(App).Assembly.GetName().Version} on Windows build {build}.{revision}, " +
+                       $"interfaces={Desktops?.BackendName ?? "none"}, error={StartupError ?? "none"}");
+
         Cube = new CubeSession(this);
         _edges = new EdgeWatcher(() =>
         {
@@ -236,12 +240,18 @@ public partial class App : Application
             }
         }
 
-        Add(Settings.ToggleCubeHotkey, () => Cube?.Toggle());
+        Add(Settings.ToggleCubeHotkey, () =>
+        {
+            EventLog.Write($"hotkey {Settings.ToggleCubeHotkey}");
+            Cube?.Toggle();
+        });
         for (var i = 0; i < Settings.SwitchToDesktopHotkeys.Count; i++)
         {
             var index = i;
             Add(Settings.SwitchToDesktopHotkeys[i], () => SwitchFromHotkey(index));
         }
+
+        EventLog.Write($"hotkeys: via keyboard hook=[{string.Join(", ", HookedHotkeys)}] problems=[{string.Join(" | ", HotkeyProblems)}]");
     }
 
     internal void ReportStatus(string message) => Status?.Invoke(message);
@@ -257,6 +267,7 @@ public partial class App : Application
         {
             if (DesktopActions.SwitchTo(Desktops, index, animate: true))
             {
+                EventLog.Write($"hotkey: switched to desktop {index + 1}");
                 ReportStatus($"Switched to desktop {index + 1}");
             }
         }
@@ -305,6 +316,7 @@ public partial class App : Application
         {
             Directory.CreateDirectory(SettingsDirectory);
             File.AppendAllText(Path.Combine(SettingsDirectory, "error.log"), $"{DateTime.Now:u} {e.Exception}\n\n");
+            EventLog.Write("unhandled error: " + e.Exception.Message);
         }
         catch (IOException)
         {

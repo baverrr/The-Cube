@@ -21,19 +21,50 @@ internal sealed class CubeSession
     private int _hiddenCount;
     private nint _previousForeground;
     private int _generation;
+    private bool _opening;
+    private double _openedAt = double.NegativeInfinity;
+    private double _closingSince = double.NaN;
+    private CubeOverlay? _focused;
 
     public CubeSession(App app)
     {
         _app = app;
-        Application.Current.Deactivated += (_, _) => CloseIfOpen(); // e.g. the Start menu opened
+
+        // KWin's cube never closes because focus moved, and Windows can steal focus for a moment just
+        // after the cube opens (its own Win+C handling, the Start menu, foreground rules). So: log it,
+        // and if it happens while the cube is still opening, take focus back.
+        Application.Current.Deactivated += (_, _) => OnAppDeactivated();
+        Application.Current.Activated += (_, _) => EventLog.Write("app activated");
     }
 
     public bool IsOpen => _overlays.Count > 0;
 
     private double Now() => _clock.Elapsed.TotalMilliseconds;
 
+    private double Duration => _app.Settings.AnimationDurationMs;
+
     public void Toggle()
     {
+        EventLog.Write($"toggle: open={IsOpen} opening={_opening} activated={_overlays.Count(o => o.Controller.Activated)}/{_overlays.Count} foreground={EventLog.ForegroundWindow()}");
+        if (_opening)
+        {
+            return;
+        }
+
+        if (IsOpen && !_overlays.Any(o => o.Controller.Activated))
+        {
+            // Closing. Normally that ends within the animation; if it hasn't (something went wrong),
+            // clean up so the cube can't get stuck "open" and ignore the hotkey for good.
+            if (!double.IsNaN(_closingSince) && Now() - _closingSince > Duration + 1500)
+            {
+                EventLog.Write("recovering: the cube was stuck closing");
+                CloseOverlays();
+                _ = OpenAsync();
+            }
+
+            return;
+        }
+
         if (IsOpen)
         {
             CloseIfOpen();
@@ -50,11 +81,48 @@ internal sealed class CubeSession
         _overlays.FirstOrDefault(o => o.Controller.Activated)?.Controller.Deactivate(Now());
     }
 
+    private void OnAppDeactivated()
+    {
+        EventLog.Write($"app deactivated: foreground={EventLog.ForegroundWindow()} open={IsOpen}");
+        if (IsOpen && _focused is { } overlay && overlay.Controller.Activated && Now() - _openedAt < Duration + 500)
+        {
+            EventLog.Write("taking focus back (lost while opening)");
+            FocusOverlay(overlay);
+        }
+    }
+
+    private static void FocusOverlay(CubeOverlay overlay)
+    {
+        ForceForeground(new System.Windows.Interop.WindowInteropHelper(overlay).Handle);
+        overlay.Activate();
+        overlay.Focus();
+    }
+
     /// <param name="previousForeground">Window to give focus back to on Esc; by default the current foreground window.</param>
     private async Task OpenAsync(nint? previousForeground = null)
     {
+        _opening = true;
+        try
+        {
+            await OpenCoreAsync(previousForeground);
+        }
+        catch (Exception ex)
+        {
+            EventLog.Write("open failed: " + ex);
+            CloseOverlays();
+            throw;
+        }
+        finally
+        {
+            _opening = false;
+        }
+    }
+
+    private async Task OpenCoreAsync(nint? previousForeground)
+    {
         if (_app.Desktops is not { } desktops || _app.Images is not { } images)
         {
+            EventLog.Write("open: no virtual desktops");
             _app.ReportStatus("The cube can't open: virtual desktops aren't available on this Windows build.");
             return;
         }
@@ -67,11 +135,13 @@ internal sealed class CubeSession
         }
         catch (Exception ex) when (ex is COMException or InvalidCastException)
         {
+            EventLog.Write("open: reading desktops failed: " + ex.Message);
             _app.ReportStatus("The cube can't open: " + ex.Message);
             return;
         }
 
         var generation = ++_generation;
+        _closingSince = double.NaN;
         _previousForeground = previousForeground ?? GetForegroundWindow();
         _switchTarget = null;
         _hiddenCount = 0;
@@ -80,7 +150,11 @@ internal sealed class CubeSession
         // so the zoom-out begins from what was on screen.
         var monitors = Monitors.All();
         var screens = DesktopImageProvider.CaptureScreens(monitors);
+        EventLog.Write($"open: desktops={count} current={current + 1} monitors={monitors.Count} foreground={EventLog.ForegroundWindow()}");
 
+        // Create and start every monitor's cube before showing any, so a focus change while windows
+        // appear can't close some cubes while others are still being made.
+        var created = new List<CubeOverlay>();
         foreach (var monitor in monitors)
         {
             var overlay = new CubeOverlay(monitor, _app.Settings, Now);
@@ -88,25 +162,34 @@ internal sealed class CubeSession
             overlay.Controller.SwitchRequested += desktop => _switchTarget = desktop;
             overlay.Controller.Hidden += OnOverlayHidden;
             overlay.AddDesktopRequested += AddDesktopAndReopen;
-            _overlays.Add(overlay);
+            created.Add(overlay);
+        }
 
-            Brush face = screens.GetValueOrDefault(monitor) is { } shot
+        _overlays.AddRange(created);
+        _openedAt = Now();
+        foreach (var overlay in created)
+        {
+            Brush face = screens.GetValueOrDefault(overlay.Monitor) is { } shot
                 ? new ImageBrush(shot) { Stretch = Stretch.Fill }
                 : new SolidColorBrush(Colors.Black);
             face.Freeze();
             overlay.Start(current, count, face);
+        }
+
+        foreach (var overlay in created)
+        {
             overlay.Show();
         }
 
         // Keyboard goes to the monitor under the pointer, as in Plasma.
         GetCursorPos(out var cursor);
-        var focused = _overlays.FirstOrDefault(o => Contains(o.Monitor.Bounds, cursor.X, cursor.Y)) ?? _overlays.FirstOrDefault();
-        if (focused is not null)
+        _focused = _overlays.FirstOrDefault(o => Contains(o.Monitor.Bounds, cursor.X, cursor.Y)) ?? _overlays.FirstOrDefault();
+        if (_focused is not null)
         {
-            ForceForeground(new System.Windows.Interop.WindowInteropHelper(focused).Handle);
-            focused.Activate();
-            focused.Focus();
+            FocusOverlay(_focused);
         }
+
+        EventLog.Write($"open: shown, foreground={EventLog.ForegroundWindow()}");
 
         if (count < CubeGeometry.MinimumFaces)
         {
@@ -121,9 +204,12 @@ internal sealed class CubeSession
         }
         catch (Exception ex) when (ex is COMException or InvalidCastException)
         {
+            EventLog.Write("capture failed: " + ex.Message);
             _app.ReportStatus("Couldn't capture the other desktops: " + ex.Message);
             return;
         }
+
+        EventLog.Write($"faces captured in {images.LastBuildTime.TotalMilliseconds:0} ms");
 
         if (generation != _generation || !IsOpen)
         {
@@ -144,6 +230,12 @@ internal sealed class CubeSession
     private void FollowClose(CubeOverlay source, int desktop)
     {
         var now = Now();
+        if (double.IsNaN(_closingSince))
+        {
+            _closingSince = now;
+            EventLog.Write($"closing onto desktop {desktop + 1}");
+        }
+
         foreach (var overlay in _overlays)
         {
             if (overlay != source)
@@ -162,24 +254,29 @@ internal sealed class CubeSession
 
         var target = _switchTarget;
         _switchTarget = null;
-        if (target is int desktop && _app.Desktops is { } desktops)
+        try
         {
-            try
+            if (target is int desktop && _app.Desktops is { } desktops)
             {
                 // While the overlays still show the target face, so there's no flash of the old desktop.
                 desktops.SwitchTo(desktop, animate: false);
+                EventLog.Write($"switched to desktop {desktop + 1}");
             }
-            catch (Exception ex) when (ex is COMException or InvalidCastException)
+            else if (_previousForeground != 0)
             {
-                _app.ReportStatus("Couldn't switch desktop: " + ex.Message);
+                SetForegroundWindow(_previousForeground);
+                EventLog.Write("closed without switching");
             }
         }
-        else if (_previousForeground != 0)
+        catch (Exception ex)
         {
-            SetForegroundWindow(_previousForeground);
+            EventLog.Write("switch failed: " + ex);
+            _app.ReportStatus("Couldn't switch desktop: " + ex.Message);
         }
-
-        CloseOverlays();
+        finally
+        {
+            CloseOverlays(); // always, so the cube can't stay stuck open
+        }
     }
 
     private void CloseOverlays()
@@ -191,6 +288,8 @@ internal sealed class CubeSession
         }
 
         _overlays.Clear();
+        _focused = null;
+        _closingSince = double.NaN;
         _generation++;
     }
 
@@ -206,8 +305,8 @@ internal sealed class CubeSession
             return;
         }
 
-        // Like Plasma, the cube appears once there are enough desktops. Focus stays with The Cube, so
-        // the app-deactivated handler doesn't close the cube that's about to open.
+        // Like Plasma, the cube appears once there are enough desktops.
+        EventLog.Write("added a desktop from the placeholder");
         var previous = _previousForeground;
         CloseOverlays();
         _ = OpenAsync(previous);

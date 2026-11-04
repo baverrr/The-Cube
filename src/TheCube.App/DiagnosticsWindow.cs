@@ -78,6 +78,13 @@ internal sealed class DiagnosticsWindow : Window
             }
         }));
         buttons.Children.Add(Button("Settings…", () => _app.ShowSettings()));
+        buttons.Children.Add(Button("Open log", () =>
+        {
+            if (System.IO.File.Exists(EventLog.PathName))
+            {
+                Process.Start(new ProcessStartInfo(EventLog.PathName) { UseShellExecute = true });
+            }
+        }));
         buttons.Children.Add(Button("Open settings file", () => Process.Start(new ProcessStartInfo(App.SettingsPath) { UseShellExecute = true })));
         root.Children.Add(buttons);
 

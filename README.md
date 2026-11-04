@@ -67,7 +67,6 @@ To build it yourself, see [Development](#development).
 | Click a face | Go to that desktop |
 | Click empty space | Go to the face in front |
 | **Esc** | Close without switching |
-| Switching to another app (e.g. the Start menu) | Closes the cube |
 
 **Tray icon:** left-click opens the cube. Right-click for **Open cube**, **Settings…**, **Diagnostics…**,
 **Start with Windows** and **Quit The Cube**. Starting `TheCube.exe` again while it's already running opens
@@ -130,6 +129,7 @@ Settings are stored in `%APPDATA%\The Cube\settings.json`, which you can also ed
 | "Windows build … isn't supported" | Your build uses desktop interfaces The Cube doesn't know yet. Please open an issue with the build number from **Diagnostics…**. |
 | Some windows are missing from other desktops' faces | Those apps can't be captured while hidden. Visit that desktop once and they'll appear from then on. |
 | It doesn't start with Windows after moving `TheCube.exe` | The start-up entry points to the old location. Untick and tick **Start with Windows** again. |
+| The cube opens and immediately closes, or stops opening | Please send `%APPDATA%\The Cube\cube.log` (**Diagnostics… → Open log**). It records each open and close, and what had focus at the time. |
 | Something went wrong | Details are in `%APPDATA%\The Cube\error.log`. |
 
 To remove The Cube: untick **Start with Windows**, quit it, delete `TheCube.exe`, and delete `%APPDATA%\The Cube`.
@@ -221,4 +221,6 @@ but no KWin code is used. The virtual desktop interface definitions are adapted 
 [MScholtes/VirtualDesktop](https://github.com/MScholtes/VirtualDesktop) (MIT); see
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-The Cube makes no network connections and collects nothing. Desktop images stay in memory and are never written to disk.
+The Cube makes no network connections and collects nothing. Desktop images stay in memory and are never
+written to disk. `cube.log` stays on your PC. It records what The Cube did, plus window class and process
+names (never window titles), and is capped at 1 MB.

@@ -295,6 +295,20 @@ public class CubeControllerTests
     }
 
     [Fact]
+    public void HeldOpenStaysOnScreenImageUntilBegun()
+    {
+        var (c, _, _) = Make();
+        c.Activate(1, 4, 1920, 1080, 0, startAnimation: false);
+        var closeRadius = c.Geometry!.CloseRadius(CubeCamera.VerticalFieldOfView);
+        c.Tick(0.016, 300);
+        Assert.Equal(closeRadius, c.Camera.Radius, 3);
+        c.BeginOpenAnimation(300);
+        c.Tick(0.016, 800);
+        Assert.Equal(c.Geometry.DistantRadius(CubeCamera.VerticalFieldOfView, 1.75), c.Camera.Radius, 2);
+        Assert.Equal(-20, c.Camera.Euler.Elevation, 2);
+    }
+
+    [Fact]
     public void TwoDesktopsShowsPlaceholderAndClickCloses()
     {
         var (c, switches, _) = Make();

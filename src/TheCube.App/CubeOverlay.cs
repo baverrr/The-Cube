@@ -32,6 +32,9 @@ internal sealed class CubeOverlay : Window
     private double _lastTick = double.NaN;
     private bool _running;
 
+    private bool _revealed;
+    private System.Windows.Threading.DispatcherTimer? _revealFallback;
+
     private bool _pressed;
     private bool _dragging;
     private Point _pressPos;
@@ -77,7 +80,18 @@ internal sealed class CubeOverlay : Window
         _root.Children.Add(_view);
         Content = _root;
 
-        SourceInitialized += (_, _) => PlaceOnMonitor();
+        SourceInitialized += (_, _) =>
+        {
+            PlaceOnMonitor();
+
+            // No Windows open/close animation (it faded the overlay in over the desktop), and stay
+            // invisible until WPF has drawn the first frame — the screen image itself — so the cube
+            // appears without a flash.
+            var hwnd = new WindowInteropHelper(this).Handle;
+            SetDwmFlag(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, true);
+            SetDwmFlag(hwnd, DWMWA_CLOAK, true);
+        };
+        ContentRendered += (_, _) => Dispatcher.BeginInvoke(Reveal, System.Windows.Threading.DispatcherPriority.Background);
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(PlaceOnMonitor);
         Closed += (_, _) => Stop();
     }
@@ -92,7 +106,13 @@ internal sealed class CubeOverlay : Window
     /// <summary>Open the cube (or the placeholder) zoomed out from <paramref name="current"/>.</summary>
     public void Start(int current, int desktopCount, Brush currentFace)
     {
-        Controller.Activate(current, desktopCount, Monitor.Bounds.Width, Monitor.Bounds.Height, _clock());
+        // Hold the camera on the screen image until the window is actually visible (see Reveal).
+        Controller.Activate(current, desktopCount, Monitor.Bounds.Width, Monitor.Bounds.Height, _clock(), startAnimation: false);
+
+        // In case ContentRendered never comes, don't leave an invisible window grabbing input.
+        _revealFallback = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _revealFallback.Tick += (_, _) => Reveal();
+        _revealFallback.Start();
         if (Controller.Geometry is { } geometry)
         {
             BuildFaces(geometry);
@@ -109,6 +129,25 @@ internal sealed class CubeOverlay : Window
         UpdateCamera();
     }
 
+    /// <summary>Uncloak the window (its first frame is drawn) and start zooming out.</summary>
+    private void Reveal()
+    {
+        _revealFallback?.Stop();
+        if (_revealed)
+        {
+            return;
+        }
+
+        _revealed = true;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd != 0)
+        {
+            SetDwmFlag(hwnd, DWMWA_CLOAK, false);
+        }
+
+        Controller.BeginOpenAnimation(_clock());
+    }
+
     public void SetFace(int desktop, Brush brush)
     {
         if (desktop >= 0 && desktop < _faces.Length)
@@ -122,6 +161,7 @@ internal sealed class CubeOverlay : Window
 
     public void Stop()
     {
+        _revealFallback?.Stop();
         if (_running)
         {
             CompositionTarget.Rendering -= OnRendering;
@@ -362,6 +402,18 @@ internal sealed class CubeOverlay : Window
             return null;
         }
     }
+
+    private const int DWMWA_TRANSITIONS_FORCEDISABLED = 3;
+    private const int DWMWA_CLOAK = 13;
+
+    private static void SetDwmFlag(nint hwnd, int attribute, bool value)
+    {
+        var v = value ? 1 : 0;
+        DwmSetWindowAttribute(hwnd, attribute, ref v, sizeof(int));
+    }
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(nint hwnd, int attribute, ref int value, int size);
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -77,7 +77,11 @@ public sealed class CubeController
         }
     }
 
-    public void Activate(int currentDesktop, int desktopCount, double screenWidth, double screenHeight, double now)
+    /// <param name="startAnimation">
+    /// False to hold the camera on the current face (looking exactly like the screen) until
+    /// <see cref="BeginOpenAnimation"/>, e.g. while the window isn't visible yet.
+    /// </param>
+    public void Activate(int currentDesktop, int desktopCount, double screenWidth, double screenHeight, double now, bool startAnimation = true)
     {
         if (Activated || !double.IsNaN(_hideAt))
         {
@@ -97,6 +101,18 @@ public sealed class CubeController
         if (Geometry is not null)
         {
             Camera.SnapClosed(Geometry, CurrentDesktop);
+            if (startAnimation)
+            {
+                Camera.AnimateOpen(Geometry, CurrentDesktop, _settings.DistanceFactor, now);
+            }
+        }
+    }
+
+    /// <summary>Start zooming out, after <see cref="Activate"/> with <c>startAnimation: false</c>.</summary>
+    public void BeginOpenAnimation(double now)
+    {
+        if (Activated && Geometry is not null && !Camera.Animating && !Camera.Busy)
+        {
             Camera.AnimateOpen(Geometry, CurrentDesktop, _settings.DistanceFactor, now);
         }
     }
