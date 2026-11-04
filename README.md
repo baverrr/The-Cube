@@ -192,7 +192,7 @@ You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). The WPF app b
 ```sh
 dotnet build TheCube.slnx
 dotnet test TheCube.slnx
-dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -o publish
+dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o publish
 ```
 
 ## Known limitations
