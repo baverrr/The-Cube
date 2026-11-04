@@ -58,5 +58,5 @@ code is copied.
    settings and multiple monitors work. Fixed after testing: the cube retracting just after it opened and
    then ignoring Win+C, the opening flicker, and other faces showing the old static wallpaper when an
    animated-wallpaper app (Lively) is in use. Added at the user's request: a Plasma-style desktop pager on
-   every taskbar, just left of Start. Still to do: README with real screenshots from a Windows PC, installer or portable exe via
+   every taskbar, just left of Start. Signing prep (done): release workflow (draft release on a `v*` tag; SignPath signing switched on by a repository variable once accepted), code signing policy in the README, first-run notice before adding desktops or the start-up entry, version metadata; see docs/SIGNING.md. Still to do: README with real screenshots from a Windows PC, installer or portable exe via
    GitHub Releases, security review.

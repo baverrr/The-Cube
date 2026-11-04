@@ -78,22 +78,34 @@ public partial class App : Application
             return;
         }
 
+        // Created now so a second launch can signal it; listened to once start-up (and any first-run
+        // question) is done, so Settings can't open on half-made state.
         _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
-        _showWait = ThreadPool.RegisterWaitForSingleObject(_showEvent, (_, _) => Dispatcher.BeginInvoke(ShowSettings), null, Timeout.Infinite, executeOnlyOnce: false);
 
         var firstRun = !File.Exists(SettingsPath);
         try
         {
             Settings = CubeSettings.Load(SettingsPath);
-            if (firstRun)
-            {
-                Settings.Save(SettingsPath); // so there's a file to edit
-            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
         {
-            StartupError = $"Couldn't read {SettingsPath}: {ex.Message}. Using the defaults.";
-            Settings = new CubeSettings();
+            // Without the user's saved choices, change nothing on the system: no extra desktops, no start-up entry.
+            StartupError = $"Couldn't read {SettingsPath}: {ex.Message}. Using the defaults, without adding desktops or starting with Windows.";
+            Settings = new CubeSettings { EnsureDesktopCount = 0, StartWithWindows = false };
+            firstRun = false;
+        }
+
+        if (firstRun)
+        {
+            AskBeforeChangingTheSystem(); // before anything below changes the system
+            try
+            {
+                Settings.Save(SettingsPath); // so the answer sticks, and there's a file to edit
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                StartupError = $"Couldn't save {SettingsPath}: {ex.Message}. Your choice applies until The Cube quits.";
+            }
         }
 
         try
@@ -139,6 +151,7 @@ public partial class App : Application
         TryApplyStartWithWindows();
 
         _tray = new TrayIcon(this);
+        _showWait = ThreadPool.RegisterWaitForSingleObject(_showEvent, (_, _) => Dispatcher.BeginInvoke(ShowSettings), null, Timeout.Infinite, executeOnlyOnce: false);
         EventLog.Write($"ready {(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds:0} ms after launch");
 
         var background = e.Args.Contains(StartWithWindows.BackgroundArgument);
@@ -151,6 +164,41 @@ public partial class App : Application
             var hotkey = string.IsNullOrWhiteSpace(Settings.ToggleCubeHotkey) ? "the tray icon" : Settings.ToggleCubeHotkey;
             _tray.ShowBalloon("The Cube is running", $"Press {hotkey} to open the cube. Right-click the tray icon for settings.");
         }
+    }
+
+    /// <summary>
+    /// First run only: say what The Cube is about to change (desktops, start-up entry) and let the user
+    /// decline, before anything is changed. Both can be changed later in Settings.
+    /// </summary>
+    private void AskBeforeChangingTheSystem()
+    {
+        var changes = new List<string>();
+        if (Settings.EnsureDesktopCount > 0)
+        {
+            changes.Add($"• add Windows virtual desktops until you have {Settings.EnsureDesktopCount}");
+        }
+
+        if (Settings.StartWithWindows)
+        {
+            changes.Add("• start automatically when you sign in to Windows");
+        }
+
+        if (changes.Count == 0)
+        {
+            return;
+        }
+
+        var answer = MessageBox.Show(
+            "Welcome to The Cube.\n\nTo work like the Plasma desktop cube, it would like to:\n\n" + string.Join("\n", changes) +
+            "\n\nYou can change both later in Settings (tray icon → Settings…).\n\nAllow these changes?",
+            "The Cube — first run", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
+        if (answer != MessageBoxResult.Yes)
+        {
+            Settings.EnsureDesktopCount = 0;
+            Settings.StartWithWindows = false;
+        }
+
+        EventLog.Write($"first run: system changes {(answer == MessageBoxResult.Yes ? "allowed" : "declined")}");
     }
 
     /// <summary>Apply edited settings: save, re-register hotkeys, update edges, the pager and start-up, and add desktops if needed. Returns an error to show, or null.</summary>

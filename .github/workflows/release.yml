@@ -1,0 +1,101 @@
+name: Release
+
+# Push a tag like v0.1.0 to build a release. It's created as a draft so it can be checked before
+# publishing. Signing with SignPath runs only once the repository variable SIGNPATH_ORGANIZATION_ID
+# and the secret SIGNPATH_API_TOKEN are set (after SignPath Foundation accepts the project); until
+# then the release is unsigned. Every signing request also needs manual approval in SignPath.
+
+on:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: write # create the draft release
+  actions: read   # SignPath reads the build's artifact and job details
+
+jobs:
+  release:
+    runs-on: windows-latest # GitHub-hosted, as SignPath requires for open-source signing
+    env:
+      TAG: ${{ github.ref_name }} # used through the environment, never pasted into scripts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Version from tag
+        id: version
+        shell: bash
+        run: |
+          version="${TAG#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag $TAG isn't a version like v1.2.3" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - run: dotnet build TheCube.slnx -c Release
+      - run: dotnet test TheCube.slnx -c Release --no-build
+
+      - name: Publish
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: >
+          dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained
+          -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none -p:Version=$env:VERSION -o publish
+
+      # SignPath signs a workflow artifact, never a file uploaded from anywhere else.
+      - name: Upload unsigned build
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: TheCube-unsigned
+          path: publish/TheCube.exe
+
+      - name: Sign with SignPath
+        if: ${{ vars.SIGNPATH_ORGANIZATION_ID != '' }}
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: the-cube
+          signing-policy-slug: release-signing
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+
+      - name: Package
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $exe = if (Test-Path signed/TheCube.exe) { 'signed/TheCube.exe' } else { 'publish/TheCube.exe' }
+          New-Item -ItemType Directory -Force release/TheCube | Out-Null
+          Copy-Item $exe release/TheCube/TheCube.exe
+          Copy-Item LICENSE release/TheCube/LICENSE.txt
+          Copy-Item THIRD-PARTY-NOTICES.md release/TheCube/THIRD-PARTY-NOTICES.txt
+          Compress-Archive -Path release/TheCube -DestinationPath "release/TheCube-$env:VERSION-win-x64.zip"
+          Copy-Item $exe release/TheCube.exe
+          "signed=$(Test-Path signed/TheCube.exe)" >> $env:GITHUB_OUTPUT
+        id: package
+
+      - name: Create draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SIGNED: ${{ steps.package.outputs.signed }}
+        run: |
+          signing="This build is **not code-signed** yet, so Windows shows \"Windows protected your PC\". See [Code signing policy](https://github.com/${GITHUB_REPOSITORY}#code-signing-policy)."
+          if [ "$SIGNED" = "True" ]; then
+            signing="Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/). See [Code signing policy](https://github.com/${GITHUB_REPOSITORY}#code-signing-policy)."
+          fi
+          gh release create "$TAG" --draft --title "The Cube $TAG" \
+            --notes "$signing" \
+            release/TheCube.exe "release/TheCube-$VERSION-win-x64.zip"

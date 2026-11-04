@@ -16,6 +16,12 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>TheCube</AssemblyName>
     <Product>The Cube</Product>
+    <!-- Release builds pass -p:Version from the git tag (release.yml). -->
+    <Version>0.1.0</Version>
+    <!-- Keep the file's product version exactly the release version (no +commit suffix): SignPath checks it. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Company>baverrr</Company>
+    <Copyright>Copyright (c) 2026 baverrr. MIT License.</Copyright>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- WPF app: DPI awareness belongs in the manifest; the WinForms analyzer (used only for the tray icon) assumes a WinForms app. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>

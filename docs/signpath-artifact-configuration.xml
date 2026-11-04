@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Starting point for the SignPath artifact configuration of The Cube (paste it into SignPath once the
+  project is accepted, and adjust there). release.yml uploads publish/TheCube.exe with
+  actions/upload-artifact, which stores it as a zip, so the root is a zip-file. SignPath Foundation
+  requires product name and version to be set and enforced on every signed file.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file path="TheCube.exe" product-name="The Cube" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

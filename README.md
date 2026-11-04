@@ -35,14 +35,15 @@ instead of switching.
 - [Project layout](#project-layout)
 - [Development](#development)
 - [Known limitations](#known-limitations)
+- [Code signing policy](#code-signing-policy)
 - [License and privacy](#license-and-privacy)
 
 ## Quick start
 
 1. **Download** `TheCube.exe` from the latest CI run or release (Windows 10 21H2/22H2, or Windows 11 22H2, 23H2, 24H2 or 25H2; x64). It's a single self-contained file (about 190 MB, precompiled so it starts quickly), so you don't need to install .NET.
-2. **Run it.** The exe isn't code-signed yet, so Windows shows "Windows protected your PC" for a downloaded copy. To stop that for good, right-click the zip or `TheCube.exe` → **Properties** → tick **Unblock** → **OK** (or run `Unblock-File .\TheCube.exe` in PowerShell). Otherwise choose **More info → Run anyway**. The Cube
-   then sits in the notification area (tray), adds virtual desktops until you have 4, and starts with
-   Windows from then on. You can turn that off in the tray menu.
+2. **Run it.** The first time, it asks before adding virtual desktops and a start-up entry. The exe isn't code-signed yet, so Windows shows "Windows protected your PC" for a downloaded copy. To stop that for good, right-click the zip or `TheCube.exe` → **Properties** → tick **Unblock** → **OK** (or run `Unblock-File .\TheCube.exe` in PowerShell). Otherwise choose **More info → Run anyway**. The Cube
+   then sits in the notification area (tray). If you allowed it, it adds virtual desktops until you have 4
+   and starts with Windows from then on. You can change both in **Settings…**.
 3. **Press Win+C.**
 
 To build it yourself, see [Development](#development).
@@ -236,6 +237,18 @@ dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:Publish
 - Faces of other desktops fill in a moment after the cube opens; until then they're plain grey.
 - Windows may already use Win+C for Copilot. The Cube then falls back to a keyboard hook, and you can pick another hotkey in settings.
 - Screen edges are ignored while a full-screen app is in front, as in Plasma.
+
+## Code signing policy
+
+Releases are built only by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), on GitHub-hosted runners. Nothing is built or signed on anyone's own PC.
+
+- **Signing:** releases are **not signed yet**. The project is preparing to apply to [SignPath Foundation](https://signpath.org/) for free open-source code signing. Once accepted, signed releases will say: *Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).*
+- **Committers and reviewers:** [baverrr](https://github.com/baverrr)
+- **Approvers** (each release must be approved before it's signed): [baverrr](https://github.com/baverrr)
+- **Privacy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+- **System changes:** on first run, The Cube asks before it adds virtual desktops or a start-up entry. Both can be changed in **Settings…**, and [removing The Cube](#troubleshooting) is described above.
+
+Maintainer notes for setting up signing are in [docs/SIGNING.md](docs/SIGNING.md).
 
 ## License and privacy
 
