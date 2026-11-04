@@ -6,7 +6,8 @@ using TheCube.Core;
 namespace TheCube.App.Interop;
 
 /// <summary>A taskbar and the parts the pager lines up with, in physical pixels.</summary>
-internal sealed record TaskbarInfo(nint Handle, PixelRect Bounds, PixelRect? Start, PixelRect? Tray, MonitorInfo Monitor, bool Shown);
+/// <param name="Obstacles">Things on the taskbar the pager mustn't cover, such as the Widgets (weather) button.</param>
+internal sealed record TaskbarInfo(nint Handle, PixelRect Bounds, PixelRect? Start, PixelRect? Tray, IReadOnlyList<PixelRect> Obstacles, MonitorInfo Monitor, bool Shown);
 
 /// <summary>
 /// Finds the taskbars (one per monitor) and where their Start buttons are. On Windows 11 the Start button
@@ -15,11 +16,14 @@ internal sealed record TaskbarInfo(nint Handle, PixelRect Bounds, PixelRect? Sta
 /// </summary>
 internal sealed class Taskbars
 {
-    // Found Start buttons are cached per taskbar (reading a cached element's position is cheap). A failed
+    private const string StartButtonId = "StartButton";
+    private const string WidgetsButtonId = "WidgetsButton"; // Windows 11's weather/Widgets button
+
+    // Found elements are cached per taskbar (reading a cached element's position is cheap). A failed
     // lookup searches the whole taskbar tree, so it's retried only every 30 seconds.
     private static readonly TimeSpan RetryMissAfter = TimeSpan.FromSeconds(30);
-    private readonly Dictionary<nint, AutomationElement?> _startButtons = [];
-    private readonly Dictionary<nint, DateTime> _misses = [];
+    private readonly Dictionary<(nint Taskbar, string Id), AutomationElement?> _elements = [];
+    private readonly Dictionary<(nint Taskbar, string Id), DateTime> _misses = [];
     private readonly Dictionary<nint, string> _anchors = [];
 
     public List<TaskbarInfo> Find(IReadOnlyList<MonitorInfo> monitors)
@@ -35,10 +39,14 @@ internal sealed class Taskbars
             return true;
         }, 0);
 
-        foreach (var gone in _startButtons.Keys.Concat(_misses.Keys).Concat(_anchors.Keys).Except(handles).ToList())
+        foreach (var key in _elements.Keys.Concat(_misses.Keys).Where(k => !handles.Contains(k.Taskbar)).Distinct().ToList())
         {
-            _startButtons.Remove(gone);
-            _misses.Remove(gone);
+            _elements.Remove(key);
+            _misses.Remove(key);
+        }
+
+        foreach (var gone in _anchors.Keys.Except(handles).ToList())
+        {
             _anchors.Remove(gone);
         }
 
@@ -64,39 +72,43 @@ internal sealed class Taskbars
             var onScreen = bounds.Intersect(monitor.Monitor.Bounds);
             var shown = NativeMethods.IsWindowVisible(hwnd) && onScreen.Height >= bounds.Height - 2 && onScreen.Width >= bounds.Width - 2;
 
-            var start = shown ? StartButton(hwnd) : null;
+            // Windows 10's Start button is a child window instead.
+            var start = shown ? Element(hwnd, StartButtonId) ?? Child(hwnd, "Start") : null;
             var tray = Child(hwnd, "TrayNotifyWnd");
+            var obstacles = shown && Element(hwnd, WidgetsButtonId) is { } widgets ? new[] { widgets } : [];
             if (shown)
             {
-                LogAnchor(hwnd, start is not null ? "Start button" : tray is not null ? "no Start button found; next to the tray" : "no Start button or tray found; right end");
+                LogAnchor(hwnd, (start is not null ? "Start button" : tray is not null ? "no Start button found; next to the tray" : "no Start button or tray found; right end") + (obstacles.Length > 0 ? ", keeping clear of the Widgets button" : ""));
             }
 
-            result.Add(new TaskbarInfo(hwnd, bounds, start, tray, monitor.Monitor, shown));
+            result.Add(new TaskbarInfo(hwnd, bounds, start, tray, obstacles, monitor.Monitor, shown));
         }
 
         return result;
     }
 
-    private PixelRect? StartButton(nint taskbar)
+    /// <summary>Where a taskbar element with this UI Automation ID is, if there is one (and it's shown).</summary>
+    private PixelRect? Element(nint taskbar, string automationId)
     {
+        var key = (taskbar, automationId);
         for (var attempt = 0; attempt < 2; attempt++)
         {
-            if (!_startButtons.TryGetValue(taskbar, out var element) || element is null)
+            if (!_elements.TryGetValue(key, out var element) || element is null)
             {
-                if (_misses.TryGetValue(taskbar, out var missedAt) && DateTime.UtcNow - missedAt < RetryMissAfter)
+                if (_misses.TryGetValue(key, out var missedAt) && DateTime.UtcNow - missedAt < RetryMissAfter)
                 {
                     break;
                 }
 
-                element = FindStartElement(taskbar);
-                _startButtons[taskbar] = element;
+                element = FindElement(taskbar, automationId);
+                _elements[key] = element;
                 if (element is null)
                 {
-                    _misses[taskbar] = DateTime.UtcNow;
+                    _misses[key] = DateTime.UtcNow;
                 }
                 else
                 {
-                    _misses.Remove(taskbar);
+                    _misses.Remove(key);
                 }
             }
 
@@ -107,7 +119,13 @@ internal sealed class Taskbars
 
             try
             {
-                var r = element.Current.BoundingRectangle;
+                var current = element.Current;
+                var r = current.BoundingRectangle;
+                if (current.IsOffscreen)
+                {
+                    return null; // e.g. Widgets turned off but still in the tree
+                }
+
                 if (!r.IsEmpty && r.Width > 0)
                 {
                     return new PixelRect((int)Math.Round(r.X), (int)Math.Round(r.Y), (int)Math.Round(r.Width), (int)Math.Round(r.Height));
@@ -118,23 +136,22 @@ internal sealed class Taskbars
                 // Explorer restarted or the taskbar was rebuilt; look it up again.
             }
 
-            _startButtons[taskbar] = null;
+            _elements[key] = null;
         }
 
-        // Windows 10: the Start button is a child window.
-        return Child(taskbar, "Start");
+        return null;
     }
 
-    private static AutomationElement? FindStartElement(nint taskbar)
+    private static AutomationElement? FindElement(nint taskbar, string automationId)
     {
         try
         {
             return AutomationElement.FromHandle(taskbar)
-                .FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, "StartButton"));
+                .FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.AutomationIdProperty, automationId));
         }
         catch (Exception ex) when (ex is ElementNotAvailableException or COMException or InvalidOperationException or ArgumentException)
         {
-            EventLog.Write($"pager: UI Automation lookup of the Start button failed: {ex.GetType().Name} 0x{ex.HResult:X8}");
+            EventLog.Write($"pager: UI Automation lookup of {automationId} failed: {ex.GetType().Name} 0x{ex.HResult:X8}");
             return null;
         }
     }

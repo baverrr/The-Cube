@@ -9,13 +9,27 @@ namespace TheCube.App;
 /// Keeps a pager on every taskbar, just left of the Start button. The taskbar layout (which moves as apps
 /// open and close on a centred taskbar) is read on a background thread every second; the desktops and
 /// windows are read on the UI thread twice a second, and right away whenever another window comes to the
-/// front (which also puts the pager back on top of the taskbar).
+/// front (which also puts the pager back on top of the taskbar). An auto-hide taskbar slides: Windows
+/// reports each move of a taskbar window, and the pager is moved with it, so it slides away and back with
+/// the taskbar instead of lagging behind. Nothing polls while the taskbar stays put.
 /// </summary>
 internal sealed class PagerManager : IDisposable
 {
     private readonly App _app;
     private readonly DispatcherTimer _timer;
+    private readonly WinEventProc _onLocationChange; // kept alive while the hook exists
+    private readonly SemaphoreSlim _wakeLayout = new(0, 1);
+    private nint _locationHook;
+    private uint _hookedProcess;
+    private bool _followPending;
+    private int _desktopCount;
     private readonly Dictionary<nint, PagerWindow> _pagers = [];
+
+    // Per taskbar: where the pager was placed and where the taskbar was then (fully shown), and the
+    // rectangles last used, so the per-frame follower only moves windows when something changed.
+    private readonly Dictionary<nint, (PixelRect Pager, PixelRect Taskbar, int Count)> _anchors = [];
+    private readonly Dictionary<nint, (PixelRect Taskbar, PixelRect? Pager)> _followed = [];
+    private readonly HashSet<nint> _suppressed = []; // full-screen app in front, or no room
     private readonly WinEventProc _onForeground; // kept alive while the hook exists
     private CancellationTokenSource? _layoutLoop;
     private List<TaskbarInfo> _layout = [];
@@ -29,6 +43,21 @@ internal sealed class PagerManager : IDisposable
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(500) };
         _timer.Tick += (_, _) => SafeRefresh();
         _onForeground = (_, _, _, _, _, _, _) => _app.Dispatcher.BeginInvoke(SafeRefresh, DispatcherPriority.Background);
+        _onLocationChange = (_, _, hwnd, idObject, idChild, _, _) =>
+        {
+            // Only the taskbar windows themselves (not their buttons, the caret or the cursor).
+            if (idObject != OBJID_WINDOW || idChild != 0 || !_pagers.ContainsKey(hwnd) || _followPending)
+            {
+                return;
+            }
+
+            _followPending = true;
+            _app.Dispatcher.BeginInvoke(() =>
+            {
+                _followPending = false;
+                Follow();
+            }, DispatcherPriority.Render);
+        };
     }
 
     /// <summary>Turn the pager on or off (the "Show the desktop pager" setting).</summary>
@@ -63,6 +92,10 @@ internal sealed class PagerManager : IDisposable
     private void Stop()
     {
         _timer.Stop();
+        UnhookLocation();
+        _anchors.Clear();
+        _followed.Clear();
+        _suppressed.Clear();
         _layoutLoop?.Cancel();
         _layoutLoop = null;
         if (_hook != 0)
@@ -110,7 +143,9 @@ internal sealed class PagerManager : IDisposable
             SafeRefresh();
             try
             {
-                await Task.Delay(1000, cancel);
+                // Every second, or straight away when a taskbar has just moved (it may have slid back in
+                // with Start somewhere else).
+                await _wakeLayout.WaitAsync(1000, cancel);
             }
             catch (OperationCanceledException)
             {
@@ -171,31 +206,54 @@ internal sealed class PagerManager : IDisposable
         {
             _pagers[gone].Close();
             _pagers.Remove(gone);
+            _anchors.Remove(gone);
+            _followed.Remove(gone);
+            _suppressed.Remove(gone);
         }
 
+        _desktopCount = list.Count;
+        HookLocationChanges();
         foreach (var taskbar in _layout)
         {
             var monitor = taskbar.Monitor;
-            var aspect = monitor.Bounds.Height > 0 ? (double)monitor.Bounds.Width / monitor.Bounds.Height : 16.0 / 9;
-            var rect = taskbar.Shown && !EdgeWatcher.FullScreenAppInFront(monitor)
-                ? Pager.Place(taskbar.Bounds, taskbar.Start, taskbar.Tray, list.Count, aspect)
-                : null;
+            if (EdgeWatcher.FullScreenAppInFront(monitor))
+            {
+                _suppressed.Add(taskbar.Handle);
+            }
+            else
+            {
+                _suppressed.Remove(taskbar.Handle);
+            }
+
+            // Re-anchor only while the taskbar is fully shown (that's when the Start button can be read);
+            // while it's sliding or hidden, the follower moves the pager from the last anchor.
+            if (taskbar.Shown)
+            {
+                var aspect = monitor.Bounds.Height > 0 ? (double)monitor.Bounds.Width / monitor.Bounds.Height : 16.0 / 9;
+                if (Pager.Place(taskbar.Bounds, taskbar.Start, taskbar.Tray, list.Count, aspect, taskbar.Obstacles) is { } placed)
+                {
+                    _anchors[taskbar.Handle] = (placed, taskbar.Bounds, list.Count);
+                }
+                else
+                {
+                    _anchors.Remove(taskbar.Handle);
+                }
+            }
+
+            if (!_anchors.ContainsKey(taskbar.Handle))
+            {
+                if (_pagers.TryGetValue(taskbar.Handle, out var unplaced))
+                {
+                    unplaced.HideNow();
+                }
+
+                continue;
+            }
 
             if (!_pagers.TryGetValue(taskbar.Handle, out var pager))
             {
-                if (rect is null)
-                {
-                    continue;
-                }
-
                 pager = new PagerWindow(monitor, SwitchTo);
                 _pagers[taskbar.Handle] = pager;
-            }
-
-            if (rect is not { } r)
-            {
-                pager.HideNow();
-                continue;
             }
 
             pager.Monitor = monitor;
@@ -203,12 +261,55 @@ internal sealed class PagerManager : IDisposable
                 .Select(d => (IReadOnlyList<PixelRect>)SceneBuilder.WindowsFor(windows, d, monitor.Bounds).Select(w => w.Frame).ToList())
                 .ToList();
             pager.Update(new PagerState(current, perDesktop));
+            _followed.Remove(taskbar.Handle); // place it (and put it back on top) on the next frame
+        }
+
+        Follow();
+    }
+
+    /// <summary>Whenever a taskbar moves (and on each refresh): keep each pager on its taskbar, sliding with an auto-hide taskbar.</summary>
+    private void Follow()
+    {
+        if (!_enabled || _app.Cube?.IsOpen == true)
+        {
+            return;
+        }
+
+        foreach (var (handle, pager) in _pagers)
+        {
+            if (!_anchors.TryGetValue(handle, out var anchor) || anchor.Count != _desktopCount || _suppressed.Contains(handle)
+                || !Capture.GetWindowRect(handle, out var rect))
+            {
+                pager.HideNow();
+                _followed.Remove(handle);
+                continue;
+            }
+
+            var taskbar = rect.ToPixelRect();
+            var target = NativeMethods.IsWindowVisible(handle) ? Pager.Follow(anchor.Pager, anchor.Taskbar, taskbar, pager.Monitor.Bounds) : null;
+            if (_followed.TryGetValue(handle, out var last) && last.Taskbar == taskbar && last.Pager == target)
+            {
+                continue; // nothing moved
+            }
+
+            if (last.Taskbar != taskbar && _followed.ContainsKey(handle))
+            {
+                WakeLayout(); // the taskbar moved: read Start's position again soon
+            }
+
+            _followed[handle] = (taskbar, target);
+            if (target is not { } r)
+            {
+                pager.HideNow();
+                continue;
+            }
+
             if (!pager.IsVisible)
             {
                 pager.Show();
             }
 
-            pager.Place(r);
+            pager.Place(r); // also puts it back above the taskbar, which comes to the front as it slides in
         }
     }
 
@@ -243,11 +344,65 @@ internal sealed class PagerManager : IDisposable
         }
     }
 
+    /// <summary>Listen for the taskbars moving; re-done if Explorer restarts (a new process).</summary>
+    private void HookLocationChanges()
+    {
+        var taskbar = _layout.FirstOrDefault();
+        if (taskbar is null)
+        {
+            return;
+        }
+
+        GetWindowThreadProcessId(taskbar.Handle, out var process);
+        if (process == 0 || process == _hookedProcess)
+        {
+            return;
+        }
+
+        UnhookLocation();
+        _locationHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, 0, _onLocationChange, process, 0, WINEVENT_OUTOFCONTEXT);
+        if (_locationHook == 0)
+        {
+            Problem("pager: couldn't watch the taskbar move; it will follow an auto-hide taskbar every half second instead");
+            return;
+        }
+
+        _hookedProcess = process;
+    }
+
+    private void UnhookLocation()
+    {
+        if (_locationHook != 0)
+        {
+            UnhookWinEvent(_locationHook);
+            _locationHook = 0;
+        }
+
+        _hookedProcess = 0;
+    }
+
+    private void WakeLayout()
+    {
+        if (_wakeLayout.CurrentCount == 0)
+        {
+            try
+            {
+                _wakeLayout.Release();
+            }
+            catch (SemaphoreFullException)
+            {
+                // Already woken.
+            }
+        }
+    }
+
     private static string Describe(Exception ex) => $"{ex.GetType().Name} 0x{ex.HResult:X8}: {ex.Message}";
 
     public void Dispose() => Stop();
 
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    private const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+    private const int OBJID_WINDOW = 0;
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
 
     private delegate void WinEventProc(nint hook, uint eventType, nint hwnd, int idObject, int idChild, uint thread, uint time);
@@ -258,4 +413,7 @@ internal sealed class PagerManager : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnhookWinEvent(nint hook);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
 }

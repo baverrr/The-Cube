@@ -36,42 +36,116 @@ public static class Pager
         return count * boxWidth + (count - 1) * Math.Max(1, boxHeight * BoxGap);
     }
 
+    /// <summary>Smallest the boxes may shrink to fit a gap, as a fraction of their full height.</summary>
+    public const double MinimumScale = 0.6;
+
     /// <summary>
-    /// Where the pager goes on a taskbar, in physical pixels: just left of the Start button. If there's no
-    /// room there (a left-aligned taskbar puts Start at the far left), just left of the notification area,
-    /// else at the right end. Null for a vertical or missing taskbar, or if it doesn't fit anywhere.
+    /// Where the pager goes on a taskbar, in physical pixels: just left of the Start button, keeping clear
+    /// of anything else on the taskbar that it mustn't cover (<paramref name="obstacles"/>, such as the
+    /// Widgets/weather button), and shrinking a little to fit if the gap is tight. If it can't fit there
+    /// (a left-aligned taskbar puts Start at the far left), it goes just left of the notification area,
+    /// then into the widest free gap. Null for a vertical or missing taskbar, or if it fits nowhere.
     /// </summary>
-    public static PixelRect? Place(PixelRect taskbar, PixelRect? start, PixelRect? tray, int count, double screenAspect)
+    public static PixelRect? Place(PixelRect taskbar, PixelRect? start, PixelRect? tray, int count, double screenAspect,
+        IReadOnlyList<PixelRect>? obstacles = null)
     {
-        if (taskbar.IsEmpty || taskbar.Width <= taskbar.Height || count <= 0)
+        if (taskbar.IsEmpty || taskbar.Width <= taskbar.Height || count <= 0 || screenAspect <= 0)
         {
             return null;
         }
 
         var padding = (int)Math.Round(taskbar.Height * VerticalPadding);
-        var height = taskbar.Height - 2 * padding;
-        var width = (int)Math.Ceiling(Width(count, height, screenAspect));
+        var fullHeight = taskbar.Height - 2 * padding;
         var gap = (int)Math.Round(taskbar.Height * StartGap);
-        var y = taskbar.Y + padding;
 
-        // Never on top of Start or the notification area.
-        bool Clear(PixelRect r) =>
-            r.X >= taskbar.X && r.Right <= taskbar.Right
-            && !(start is { IsEmpty: false } st && r.IntersectsWith(st))
-            && !(tray is { IsEmpty: false } tr && r.IntersectsWith(tr));
-
-        if (start is { IsEmpty: false } s)
+        // Free stretches of the taskbar between the things not to cover, each kept a gap away.
+        var blockers = new List<PixelRect>();
+        if (start is { IsEmpty: false } s) blockers.Add(s);
+        if (tray is { IsEmpty: false } t) blockers.Add(t);
+        blockers.AddRange((obstacles ?? []).Where(o => !o.IsEmpty));
+        var free = new List<(int Left, int Right)>();
+        var x = taskbar.X + gap;
+        foreach (var b in blockers.Where(b => b.Right > taskbar.X && b.X < taskbar.Right).OrderBy(b => b.X))
         {
-            var left = new PixelRect(s.X - gap - width, y, width, height);
-            if (left.X >= taskbar.X + gap && Clear(left))
+            if (b.X - gap > x)
             {
-                return left;
+                free.Add((x, b.X - gap));
+            }
+
+            x = Math.Max(x, b.Right + gap);
+        }
+
+        if (taskbar.Right - gap > x)
+        {
+            free.Add((x, taskbar.Right - gap));
+        }
+
+        PixelRect? FitAgainstRight((int Left, int Right) gapRange)
+        {
+            var available = gapRange.Right - gapRange.Left;
+            var height = fullHeight;
+            if (Width(count, height, screenAspect) > available)
+            {
+                // Width grows in proportion to height (gaps included), so scale the height to fit.
+                height = (int)Math.Floor(available / (count * screenAspect + (count - 1) * BoxGap));
+                while (height > 0 && Width(count, height, screenAspect) > available)
+                {
+                    height--;
+                }
+
+                if (height < fullHeight * MinimumScale)
+                {
+                    return null;
+                }
+            }
+
+            var width = (int)Math.Ceiling(Width(count, height, screenAspect));
+            return new PixelRect(gapRange.Right - width, taskbar.Y + (taskbar.Height - height) / 2, width, height);
+        }
+
+        // 1. The gap that ends just left of Start; 2. the one just left of the tray; 3. the widest.
+        var preferred = new List<(int Left, int Right)>();
+        if (start is { IsEmpty: false } st)
+        {
+            preferred.AddRange(free.Where(f => f.Right == st.X - gap));
+        }
+
+        if (tray is { IsEmpty: false } tr)
+        {
+            preferred.AddRange(free.Where(f => f.Right == tr.X - gap));
+        }
+
+        if (start is null && tray is null)
+        {
+            preferred.AddRange(free.Where(f => f.Right == taskbar.Right - gap));
+        }
+
+        preferred.AddRange(free.OrderByDescending(f => f.Right - f.Left));
+        foreach (var range in preferred)
+        {
+            if (FitAgainstRight(range) is { } placed)
+            {
+                return placed;
             }
         }
 
-        var right = tray is { IsEmpty: false } t && t.X > taskbar.X ? t.X : taskbar.Right;
-        var fallback = new PixelRect(right - gap - width, y, width, height);
-        return Clear(fallback) ? fallback : null;
+        return null;
+    }
+
+    /// <summary>
+    /// Keep the pager stuck to a taskbar that's sliding (auto-hide): move it by as much as the taskbar has
+    /// moved since the pager was placed. Null once it would be off its monitor (the taskbar is hidden).
+    /// </summary>
+    public static PixelRect? Follow(PixelRect placed, PixelRect taskbarWhenPlaced, PixelRect taskbarNow, PixelRect monitor)
+    {
+        var moved = placed with
+        {
+            X = placed.X + taskbarNow.X - taskbarWhenPlaced.X,
+            Y = placed.Y + taskbarNow.Y - taskbarWhenPlaced.Y,
+        };
+
+        // Wholly on its monitor, or not at all: part-way it would show on a neighbouring monitor.
+        return moved.Intersect(monitor) == moved ? moved : null;
     }
 
     /// <summary>The boxes inside a pager of the given size, left to right.</summary>

@@ -813,3 +813,69 @@ public class ReviewFollowUpTests
         Assert.Equal([2], switches);
     }
 }
+
+public class PagerFollowTests
+{
+    private static readonly PixelRect Monitor = new(0, 0, 1920, 1080);
+    private static readonly PixelRect Taskbar = new(0, 1032, 1920, 48);
+    private static readonly PixelRect Placed = new(600, 1040, 240, 32);
+
+    [Fact]
+    public void Stays_put_while_the_taskbar_does() =>
+        Assert.Equal(Placed, Pager.Follow(Placed, Taskbar, Taskbar, Monitor));
+
+    [Fact]
+    public void Slides_with_an_auto_hide_taskbar()
+    {
+        var sliding = Taskbar with { Y = 1036 };
+        Assert.Equal(Placed with { Y = 1044 }, Pager.Follow(Placed, Taskbar, sliding, Monitor));
+    }
+
+    [Fact]
+    public void Hides_once_it_would_leave_the_monitor()
+    {
+        var hidden = Taskbar with { Y = 1078 }; // a 2 px sliver stays on screen
+        Assert.Null(Pager.Follow(Placed, Taskbar, hidden, Monitor));
+    }
+}
+
+public class PagerObstacleTests
+{
+    private static readonly PixelRect Taskbar = new(0, 1032, 1920, 48);
+    private static readonly PixelRect Tray = new(1600, 1032, 320, 48);
+    private const double Aspect = 16.0 / 9;
+
+    [Fact]
+    public void Keeps_clear_of_the_weather_button()
+    {
+        var weather = new PixelRect(0, 1032, 300, 48); // leaves 276 px; full size needs about 236
+        var start = new PixelRect(600, 1036, 40, 40);
+        var r = Pager.Place(Taskbar, start, Tray, 4, Aspect, [weather])!.Value;
+        Assert.False(r.IntersectsWith(weather));
+        Assert.Equal(start.X - 12, r.Right);
+        Assert.Equal(32, r.Height); // room for full size
+    }
+
+    [Fact]
+    public void Shrinks_to_fit_a_tight_gap_next_to_start()
+    {
+        // Full size is about 236 px wide; give it 200 between the weather and Start.
+        var weather = new PixelRect(0, 1032, 376, 48); // 388..588 free
+        var start = new PixelRect(600, 1036, 40, 40);
+        var r = Pager.Place(Taskbar, start, Tray, 4, Aspect, [weather])!.Value;
+        Assert.False(r.IntersectsWith(weather));
+        Assert.Equal(start.X - 12, r.Right);
+        Assert.InRange(r.Height, 20, 31);
+        Assert.Equal(1032 + (48 - r.Height) / 2, r.Y); // centred
+    }
+
+    [Fact]
+    public void Moves_next_to_the_tray_when_the_gap_is_too_small()
+    {
+        var weather = new PixelRect(0, 1032, 500, 48);
+        var start = new PixelRect(600, 1036, 40, 40);
+        var r = Pager.Place(Taskbar, start, Tray, 4, Aspect, [weather])!.Value;
+        Assert.Equal(Tray.X - 12, r.Right);
+        Assert.False(r.IntersectsWith(weather));
+    }
+}

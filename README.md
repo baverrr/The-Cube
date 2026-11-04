@@ -54,7 +54,7 @@ To build it yourself, see [Development](#development).
 - Drag to spin it, use the mouse wheel to zoom, or use the arrow keys to turn it one face at a time.
 - Works with Windows' own desktops, so Task View, Win+Ctrl+←/→ and the taskbar stay in sync.
 - Shows a cube on every monitor, each with its own part of every desktop. Picking a desktop on one monitor zooms every monitor into it.
-- A desktop pager on the taskbar, just left of the Start button, like Plasma's Pager widget: one box per desktop with its windows outlined. Click a box to go there, or scroll over it.
+- A desktop pager on the taskbar, just left of the Start button, like Plasma's Pager widget: one box per desktop with its windows outlined. Click a box to go there, or scroll over it. It keeps clear of the weather button and slides with an auto-hide taskbar.
 - Works with animated-wallpaper apps such as Lively Wallpaper and Wallpaper Engine: other desktops' faces show a frame of the animated wallpaper, not the old static picture.
 - A plain colour or skybox image behind the cube, and optional screen-edge activation.
 
@@ -176,7 +176,8 @@ flowchart LR
 - **Pager.** One small tool window per taskbar. It never takes focus and shows on every desktop.
   - Windows 11's Start button isn't a window of its own, so its position comes from UI Automation (`StartButton`), read once a second on a background thread. A centred taskbar moves Start as apps open and close, and the pager follows.
   - Desktops and windows are read twice a second, and straight away whenever another window comes to the front. That also puts the pager back above the taskbar.
-  - It hides while the cube is open, while a full-screen app is in front, and while an auto-hidden taskbar is hidden.
+  - It keeps clear of the Widgets (weather) button, also found with UI Automation (`WidgetsButton`). If the gap between that and Start is tight, the boxes shrink a little (to 60% at most); if it's still too small, the pager goes next to the notification area.
+  - It hides while the cube is open and while a full-screen app is in front. With an auto-hide taskbar, Windows reports each move of the taskbar window (`EVENT_OBJECT_LOCATIONCHANGE`) and the pager moves with it, so it slides away and back with the taskbar. Nothing polls while the taskbar stays put.
 
 </details>
 
