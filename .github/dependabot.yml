@@ -1,0 +1,23 @@
+# Keeps the pinned action SHAs and the test project's NuGet packages current.
+# A 7-day cooldown lets new releases age before a PR is opened (security updates are not delayed).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      test-packages:
+        patterns: ["*"]
