@@ -156,18 +156,14 @@ To remove The Cube: untick **Start with Windows**, quit it, delete `TheCube.exe`
 
 ## How it works
 
-```mermaid
-flowchart LR
-    HK[Global hotkeys<br/>RegisterHotKey] --> APP[Tray app]
-    EDGE[Screen edges] --> APP
-    APP --> CTRL[CubeController<br/>Core, unit-tested]
-    VD[Windows virtual desktops<br/>COM interop] <--> APP
-    CAP[Desktop images<br/>screen grab + PrintWindow] --> VIEW
-    CTRL --> VIEW[Overlay per monitor<br/>WPF Viewport3D]
-    VIEW -- clicks, keys, drag --> CTRL
-    CTRL -- switch to desktop N --> VD
-    PAGER[Taskbar pager<br/>one per taskbar] <--> VD
-```
+<p align="center">
+  <img src="docs/diagrams/architecture.svg" alt="How it works: Win+C or a screen edge toggles CubeSession, which captures a picture of every desktop (screen grab and PrintWindow) and opens a CubeOverlay with a 3D cube on each monitor. The overlay passes clicks and keys to CubeController, which picks a desktop; CubeSession then switches to it through Windows' undocumented virtual desktop COM interfaces. Ctrl+F1 to F4 and the taskbar pager switch desktops directly, and the pager reads the desktops to draw itself." width="860">
+</p>
+
+The hotkeys use `RegisterHotKey`, with a keyboard hook for ones Windows keeps for itself. The diagram is
+drawn with [archgram](https://github.com/byabas/archgram) from
+[`docs/diagrams/architecture.archgram.yaml`](docs/diagrams/architecture.archgram.yaml), in the app's
+own colours.
 
 <details>
 <summary>The details</summary>
@@ -215,6 +211,8 @@ src/TheCube.App/      WPF app: start-up, hotkeys, diagnostics window
 tests/TheCube.Core.Tests/  xUnit tests for Core (run on any OS)
 .github/workflows/     CI: build, test, publish win-x64 exe on windows-latest
 PLAN.md                Phases and what's left
+docs/diagrams/          README diagram: archgram spec, the SVG drawn from it, its colours
+archgram.theme.json    Maps the diagram to the app's colours
 ```
 
 ## Development
