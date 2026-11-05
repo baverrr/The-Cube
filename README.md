@@ -42,6 +42,7 @@ instead of switching.
 - [Development](#development)
 - [Known limitations](#known-limitations)
 - [Code signing policy](#code-signing-policy)
+- [Security](#security)
 - [License and privacy](#license-and-privacy)
 
 ## Quick start
@@ -214,6 +215,8 @@ src/TheCube.App/      WPF app: start-up, hotkeys, diagnostics window
                       capture, monitors, IDesktopWallpaper, taskbars/Start button, live wallpaper, Win32 calls
 tests/TheCube.Core.Tests/  xUnit tests for Core (run on any OS)
 .github/workflows/     CI: build, test, publish win-x64 exe on windows-latest
+.github/dependabot.yml Weekly updates for the pinned actions and test packages
+SECURITY.md            How to report a vulnerability
 PLAN.md                Phases and what's left
 ```
 
@@ -259,6 +262,11 @@ Releases are built only by GitHub Actions from this repository ([release workflo
 - **System changes:** on first run, The Cube asks before it adds virtual desktops or a start-up entry. Both can be changed in **Settings…**, and [removing The Cube](#troubleshooting) is described above.
 
 Maintainer notes for setting up signing are in [docs/SIGNING.md](docs/SIGNING.md).
+
+## Security
+
+Report vulnerabilities privately; see [SECURITY.md](SECURITY.md). Every action in the workflows is
+pinned to a full commit SHA, and Dependabot proposes updates weekly after a 7-day cooldown.
 
 ## License and privacy
 
