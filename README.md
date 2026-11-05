@@ -217,12 +217,16 @@ tests/TheCube.Core.Tests/  xUnit tests for Core (run on any OS)
 .github/workflows/     CI: build, test, publish win-x64 exe on windows-latest
 .github/dependabot.yml Weekly updates for the pinned actions and test packages
 SECURITY.md            How to report a vulnerability
+CONTRIBUTING.md        Bug reports, building, pull requests
+.editorconfig          Whitespace rules for editors
 PLAN.md                Phases and what's left
 ```
 
 ## Development
 
 You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). The WPF app builds on Linux too (`EnableWindowsTargeting`), but it only runs on Windows.
+
+To report a bug or send a pull request, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```sh
 dotnet build TheCube.slnx
