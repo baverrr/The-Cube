@@ -1,0 +1,71 @@
+archgram: 1
+title: The Cube
+description: >-
+  Win+C or a screen edge toggles the cube session, which captures a picture
+  of every desktop and opens a 3D overlay on each monitor. The overlay hands
+  your clicks, keys and drags to the unit-tested CubeController, which picks
+  a desktop; the session then switches Windows to it through Windows'
+  undocumented virtual desktop interfaces. Ctrl+F1 to F4 and the taskbar
+  pager switch desktops directly, and the pager reads the desktops to draw
+  itself.
+direction: down
+frames:
+  - { id: app, label: The Cube (WPF tray app) }
+nodes:
+  - id: triggers
+    kind: tool
+    label: Hotkeys & screen edges
+    note: Win+C · Ctrl+F1–F4 · corners
+    frame: app
+    source: [../../src/TheCube.App/HotkeyManager.cs, ../../src/TheCube.App/EdgeWatcher.cs]
+  - id: session
+    kind: service
+    label: CubeSession
+    note: one cube on every monitor
+    tech: dotnet
+    frame: app
+    source: ../../src/TheCube.App/CubeSession.cs
+  - id: images
+    kind: service
+    label: Desktop images
+    note: screen grab + PrintWindow
+    frame: app
+    source: ../../src/TheCube.App/DesktopImages.cs
+  - id: overlay
+    kind: desktop
+    label: CubeOverlay
+    note: Viewport3D, per monitor
+    variant: multi
+    frame: app
+    source: ../../src/TheCube.App/CubeOverlay.cs
+  - id: controller
+    kind: service
+    label: CubeController
+    note: TheCube.Core, unit-tested
+    frame: app
+    source: ../../src/TheCube.Core/CubeController.cs
+  - id: pager
+    kind: desktop
+    label: Taskbar pager
+    note: one per taskbar
+    frame: app
+    source: ../../src/TheCube.App/PagerManager.cs
+  - id: vd
+    kind: service
+    label: Windows virtual desktops
+    note: undocumented COM interfaces
+    variant: external
+    source: ../../src/TheCube.App/Interop/WindowsVirtualDesktops.cs
+edges:
+  - { from: triggers, to: session, label: toggle, source: '../../src/TheCube.App/App.xaml.cs#Cube?.Toggle();' }
+  - { from: triggers, to: vd, label: Ctrl+F1–F4, source: '../../src/TheCube.App/App.xaml.cs#if (DesktopActions.SwitchTo(Desktops, index, animate: true))' }
+  - { from: session, to: images, label: capture, source: '../../src/TheCube.App/CubeSession.cs#DesktopImageProvider.CaptureScreens(monitors)' }
+  - { from: session, to: overlay, label: open, source: '../../src/TheCube.App/CubeSession.cs#new CubeOverlay(monitor, _app.Settings, Now)' }
+  - { from: overlay, to: controller, label: clicks · keys, source: '../../src/TheCube.App/CubeOverlay.cs#Controller.Clicked(' }
+  - { from: controller, to: session, label: picked desktop, source: '../../src/TheCube.App/CubeSession.cs#overlay.Controller.Closing += desktop => FollowClose(overlay, desktop)' }
+  - { from: session, to: vd, label: switch, source: '../../src/TheCube.App/CubeSession.cs#desktops.SwitchTo(desktop, animate: false)' }
+  - { from: pager, to: vd, label: read · switch, source: '../../src/TheCube.App/PagerManager.cs#list = desktops.GetDesktops();' }
+flows:
+  - { name: open the cube, steps: [triggers, session, [images, overlay]] }
+  - { name: pick a face, steps: [overlay, controller, session, vd] }
+  - { name: a pager click, steps: [pager, vd] }
