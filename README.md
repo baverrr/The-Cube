@@ -3,268 +3,154 @@
 [![CI](https://github.com/baverrr/The-Cube/actions/workflows/ci.yml/badge.svg)](https://github.com/baverrr/The-Cube/actions/workflows/ci.yml)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-blue)
 ![.NET](https://img.shields.io/badge/.NET-10-512BD4)
-![License](https://img.shields.io/badge/license-MIT-green)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A 3D desktop cube for Windows' own virtual desktops, modelled on KDE Plasma's Desktop Cube effect.
-Press **Win+C**, spin the cube, and click a face to jump to that desktop.
+A 3D desktop cube for Windows' own virtual desktops, modelled on KDE Plasma's Desktop Cube effect. Press Win+C, spin the cube, and click a face to jump to that desktop.
+
+<p align="center">
+  <img src="docs/images/cube-windows.jpg" alt="The cube open, showing a desktop with a File Explorer window on its front face" width="860">
+</p>
 
 > [!TIP]
-> **Win+C** opens and closes the cube. **Ctrl+F1–F4** jump straight to desktops 1–4, or click a box in the
-> pager just left of the Start button.
+> Win+C opens and closes the cube. Ctrl+F1 to Ctrl+F4 jump straight to desktops 1 to 4, or click a box in the pager just left of the Start button.
 
-> [!WARNING]
-> **Early release.** Everything has been tested on Windows 11 (cube, hotkeys, tray, settings, multiple
-> monitors, the taskbar pager and animated wallpapers), but only on one PC so far. See [PLAN.md](PLAN.md).
+> [!IMPORTANT]
+> Early release, tested on one Windows 11 PC so far. The Cube uses Windows interfaces that Microsoft doesn't document, and they can change between Windows builds. On a build it doesn't know, it shows a message instead of switching. See [PLAN.md](PLAN.md).
 
-<p align="center">
-  <img src="docs/images/cube-windows.jpg" alt="The cube open on one monitor, showing a desktop with a File Explorer window on its front face" width="49%">
-  <img src="docs/images/cube-rotating.jpg" alt="The cube turned between two desktop faces" width="49%">
-</p>
-<p align="center">
-  <img src="docs/images/cube-front.jpg" alt="The cube on a second monitor, zoomed out from the current desktop" width="49%">
-  <img src="docs/images/settings.png" alt="The Settings window: start-up, pager, desktop count, shortcuts, cube colour and screen edges" width="35%">
-</p>
+**[What it does](#what-it-does)** · **[What you need](#what-you-need)** · **[Install](#install)** · **[How to use it](#how-to-use-it)** · **[Help](#help)**
 
-The Cube switches desktops through Windows interfaces that Microsoft doesn't document, and those
-can change between Windows builds. On a build it doesn't recognise, The Cube shows a message
-instead of switching.
+## What it does
 
-## Contents
+- **One face per desktop.** Uses Windows' own virtual desktops, so Task View, Win+Ctrl+←/→ and the taskbar stay in sync. It needs at least 3 desktops and offers to add one if you have fewer.
+- **Plasma's motion.** Zooms out from your desktop tilted 20° down, and zooms back into the face you pick.
+- **Mouse or keys.** Drag to spin, scroll to zoom, or use the arrow keys to turn one face at a time.
+- **Every monitor.** Each monitor gets its own cube. Picking a desktop on one moves them all.
+- **Taskbar pager.** One box per desktop, just left of Start, with its windows outlined. Click or scroll over it to switch.
+- **Animated wallpapers.** Works with apps like Lively Wallpaper and Wallpaper Engine.
+- **Stays on your PC.** No network connections and nothing collected.
 
-- [Quick start](#quick-start)
-- [Features](#features)
-- [Using it](#using-it)
-- [Testing the current build](#testing-the-current-build)
-- [Settings](#settings)
-- [Troubleshooting](#troubleshooting)
-- [How it works](#how-it-works)
-- [Project layout](#project-layout)
-- [Development](#development)
-- [Known limitations](#known-limitations)
-- [Code signing policy](#code-signing-policy)
-- [License and privacy](#license-and-privacy)
+<table>
+  <tr>
+    <td><img src="docs/images/cube-rotating.jpg" alt="The cube turned between two desktop faces"></td>
+    <td><img src="docs/images/cube-front.jpg" alt="The cube on a second monitor, zoomed out from the current desktop"></td>
+  </tr>
+  <tr>
+    <td align="center">Spinning the cube</td>
+    <td align="center">A second monitor</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/settings.png" alt="The Settings window: start-up, pager, desktop count, shortcuts, cube colour and screen edges" width="273"></td>
+    <td align="center"><img src="docs/images/pager.png" alt="The taskbar pager: four desktop boxes just left of the Start button" width="411"></td>
+  </tr>
+  <tr>
+    <td align="center">Settings</td>
+    <td align="center">The taskbar pager</td>
+  </tr>
+</table>
 
-## Quick start
+## What you need
 
-1. **Download** `TheCube.exe` from the latest CI run or release (Windows 10 21H2/22H2, or Windows 11 22H2, 23H2, 24H2 or 25H2; x64). It's a single self-contained file (about 190 MB, precompiled so it starts quickly), so you don't need to install .NET.
-2. **Run it.** The first time, it asks before adding virtual desktops and a start-up entry. The exe isn't code-signed yet, so Windows shows "Windows protected your PC" for a downloaded copy. To stop that for good, right-click the zip or `TheCube.exe` → **Properties** → tick **Unblock** → **OK** (or run `Unblock-File .\TheCube.exe` in PowerShell). Otherwise choose **More info → Run anyway**. The Cube
-   then sits in the notification area (tray). If you allowed it, it adds virtual desktops until you have 4
-   and starts with Windows from then on. You can change both in **Settings…**.
-3. **Press Win+C.**
+- Windows 10 21H2 or 22H2, or Windows 11 22H2, 23H2, 24H2 or 25H2, on x64
+- Nothing else. The exe is self-contained, so you don't need to install .NET
 
-To build it yourself, see [Development](#development).
+## Install
 
-## Features
+1. Download `TheCube.exe` from the latest [release](https://github.com/baverrr/The-Cube/releases) or [CI run](https://github.com/baverrr/The-Cube/actions/workflows/ci.yml) (the `TheCube-win-x64` artifact). It's one file of about 190 MB.
 
-- A cube with one face per Windows virtual desktop. It needs at least 3; with fewer, it offers to add one.
-- The same motion as Plasma's cube: zooms out from your current desktop tilted 20° down, and zooms back into the face you pick.
-- Drag to spin it, use the mouse wheel to zoom, or use the arrow keys to turn it one face at a time.
-- Works with Windows' own desktops, so Task View, Win+Ctrl+←/→ and the taskbar stay in sync.
-- Shows a cube on every monitor, each with its own part of every desktop. Picking a desktop on one monitor zooms every monitor into it.
-- A desktop pager on the taskbar, just left of the Start button, like Plasma's Pager widget: one box per desktop with its windows outlined. Click a box to go there, or scroll over it. It keeps clear of the weather button and slides with an auto-hide taskbar.
-- Works with animated-wallpaper apps such as Lively Wallpaper and Wallpaper Engine: other desktops' faces show a frame of the animated wallpaper, not the old static picture.
-- A plain colour or skybox image behind the cube, and optional screen-edge activation.
+2. Unblock it. The exe isn't code-signed yet, so Windows warns about it. Right-click it, choose Properties, tick Unblock and press OK. Or in PowerShell:
 
-## Using it
+   ```powershell
+   Unblock-File .\TheCube.exe
+   ```
 
-| Key / action | What it does |
+   You can also choose More info, then Run anyway, when Windows warns you.
+
+3. Run it. The first time, it asks before adding desktops (up to 4) and starting with Windows. It then sits in the notification area.
+
+4. Press Win+C.
+
+## How to use it
+
+| Key or action | What it does |
 |---|---|
-| **Win+C** | Open or close the cube |
-| **Ctrl+F1 … Ctrl+F4** | Switch to desktop 1 … 4 |
+| Win+C | Open or close the cube |
+| Ctrl+F1 to Ctrl+F4 | Switch to desktop 1 to 4 |
 | Drag | Spin the cube (tilt is limited to ±30°) |
 | Mouse wheel | Zoom in or out |
-| **←** / **→** | Turn one face left or right |
-| **Enter**, **Space** | Go to the face in front |
+| ← / → | Turn one face left or right |
+| Enter, Space, or click empty space | Go to the face in front |
 | Click a face | Go to that desktop |
-| Click empty space | Go to the face in front |
-| **Esc** | Close without switching |
-| Click a pager box | Go to that desktop |
-| Scroll over the pager | Next / previous desktop (wraps round) |
+| Esc | Close without switching |
+| Click or scroll over the pager | Go to that desktop, or the next or previous one |
 
-<p align="center">
-  <img src="docs/images/pager.png" alt="The taskbar pager: four desktop boxes just left of the Start button, the first one highlighted" width="411">
-</p>
+The tray icon opens the cube on left-click. Right-click it for Settings, Diagnostics, Start with Windows and Quit. Running `TheCube.exe` again while it's open also opens Settings.
 
-**Tray icon:** left-click opens the cube. Right-click for **Open cube**, **Settings…**, **Diagnostics…**,
-**Start with Windows** and **Quit The Cube**. Starting `TheCube.exe` again while it's already running opens
-Settings.
+Ctrl+F4 usually closes a tab in many apps. The Cube takes it over by default. Change `SwitchToDesktopHotkeys` to get it back.
 
-> Ctrl+F4 normally closes a tab or document in many Windows apps. The Cube takes it over by default
-> to match the Plasma set-up. Change `SwitchToDesktopHotkeys` if you want it back.
+<details>
+<summary><b>Settings</b></summary>
 
-## Testing the current build
-
-**Diagnostics…** in the tray menu opens a window for checking The Cube on your PC. It also opens
-by itself at start-up if something's wrong. It shows:
-
-- your Windows build and which set of desktop interfaces The Cube picked for it
-- whether each hotkey was registered, which ones fall back to the keyboard hook, and why any couldn't be set up
-- your desktops, with ▶ marking the current one. This updates live when you switch with Win+Ctrl+←/→.
-- **Open cube** (the same as Win+C), **Switch** buttons, **Add desktop**, **Settings…** and **Open settings file**
-- **Preview desktop images**: the picture each cube face would show, with one row per monitor and one column per desktop. Each one says how it was made:
-  - the current desktop is a *screen grab*
-  - on other desktops, windows are *live* (captured just now), *cached* (couldn't be captured now, so their last good image is used) or *missing* (never captured)
-
-Try Win+C (or **Open cube**) and Ctrl+F1–F4 from any app. Ctrl+F1–F4 should play Windows' slide animation
-and give focus to the top window on the new desktop.
-
-**Getting a test build:** open the latest [CI run](https://github.com/baverrr/The-Cube/actions/workflows/ci.yml)
-and download the `TheCube-win-x64` artifact. Windows SmartScreen will warn about an unsigned app:
-choose **More info → Run anyway**.
-
-## Settings
-
-Open **Settings…** from the tray menu. Changes apply as soon as you press **Save**:
-
-- **General:** start with Windows, show the taskbar pager, and how many desktops to keep.
-- **Shortcuts:** click a box and press the keys; Backspace clears it.
-- **Cube:** background colour or skybox, face displacement, distance factor, animation length, and inverted dragging.
-- **Screen edges:** which edges and corners open the cube when the pointer rests on them for 150 ms.
-
-Settings are stored in `%APPDATA%\The Cube\settings.json`, which you can also edit by hand while The Cube isn't running. The defaults match the Plasma set-up this app is modelled on:
+Open Settings from the tray menu. Changes apply when you press Save. You can pick shortcuts, the cube's colour or a skybox image, animation length, and which screen edges or corners open the cube. Settings are saved in `%APPDATA%\The Cube\settings.json`, which you can edit while The Cube isn't running.
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `FaceDisplacement` | `100` | Extra gap between the cube's centre and each face (px) |
 | `DistanceFactor` | `1.75` | How far the camera pulls back when the cube opens |
 | `MouseInvertedX` / `MouseInvertedY` | `false` | Reverse drag direction |
-| `Background` | `Color` | `Color` or `SkyBox` |
-| `BackgroundColor` | `#212427` | Colour behind the cube |
-| `SkyBox` | — | Image path for the `SkyBox` background |
+| `Background` / `BackgroundColor` / `SkyBox` | `Color` / `#212427` / none | Plain colour or a skybox image behind the cube |
 | `BorderActivate` | `[]` | Screen edges that open the cube, e.g. `["TopLeft"]` |
 | `AnimationDurationMs` | `566` | Open, close and rotate animation length |
-| `StartWithWindows` | `true` | Start when you sign in (a per-user `Run` registry entry) |
-| `ShowPager` | `true` | Show the desktop pager on every taskbar, just left of Start |
+| `StartWithWindows` | `true` | Start when you sign in |
+| `ShowPager` | `true` | Show the pager on every taskbar |
 | `EnsureDesktopCount` | `4` | Add desktops at start-up until there are this many (`0` = leave alone) |
 | `ToggleCubeHotkey` | `Win+C` | Open/close hotkey |
 | `SwitchToDesktopHotkeys` | `Ctrl+F1`…`Ctrl+F4` | One entry per desktop; `""` = unbound |
-
-## Troubleshooting
-
-| Problem | Fix |
-|---|---|
-| Win+C opens Copilot instead | Windows kept the shortcut. The Cube catches it with a keyboard hook instead; **Diagnostics…** shows whether that's active. If it still doesn't work, choose another shortcut in **Settings…**. |
-| "Windows build … isn't supported" | Your build uses desktop interfaces The Cube doesn't know yet. Please open an issue with the build number from **Diagnostics…**. |
-| Some windows are missing from other desktops' faces | Those apps can't be captured while hidden. Visit that desktop once and they'll appear from then on. |
-| It doesn't start with Windows after moving `TheCube.exe` | The start-up entry points to the old location. Untick and tick **Start with Windows** again. |
-| The cube opens and immediately closes, or stops opening | Please send `%APPDATA%\The Cube\cube.log` (**Diagnostics… → Open log**). It records each open and close, and what had focus at the time. |
-| The pager is in the wrong place or covers something | `cube.log` has a `pager:` line with where it went and what it fitted around (positions only). Please send it. With a left-aligned taskbar there's no room left of Start, so it sits left of the notification area. You can turn it off in **Settings…**. |
-| Other desktops show an old wallpaper | If you use an animated-wallpaper app, `cube.log` has a `live wallpaper:` line saying which window it found and whether it could be captured. Please send it. |
-| Something went wrong | Details are in `%APPDATA%\The Cube\error.log`. |
-
-To remove The Cube: untick **Start with Windows**, quit it, delete `TheCube.exe`, and delete `%APPDATA%\The Cube`.
-
-## How it works
-
-<p align="center">
-  <img src="docs/diagrams/architecture.svg" alt="How it works: Win+C or a screen edge toggles CubeSession, which captures a picture of every desktop (screen grab and PrintWindow) and opens a CubeOverlay with a 3D cube on each monitor. The overlay passes clicks and keys to CubeController, which picks a desktop; CubeSession then switches to it through Windows' undocumented virtual desktop COM interfaces. Ctrl+F1 to F4 and the taskbar pager switch desktops directly, and the pager reads the desktops to draw itself." width="860">
-</p>
-
-The hotkeys use `RegisterHotKey`, with a keyboard hook for ones Windows keeps for itself. The diagram is
-drawn with [archgram](https://github.com/byabas/archgram) from
-[`docs/diagrams/architecture.archgram.yaml`](docs/diagrams/architecture.archgram.yaml), in the app's
-own colours.
-
-<details>
-<summary>The details</summary>
-
-- **Geometry.** With *n* desktops, the faces form an *n*-sided prism around the vertical axis, each face
-  the size of the screen. Face *i* sits at azimuth `i·360/n` and distance
-  `½·width / tan(180°/n) + FaceDisplacement` from the centre.
-- **Camera.** The camera orbits the centre, always looking at it, with a 60° vertical field of view.
-  - **Closed:** the current face exactly fills the screen.
-  - **Open:** the camera is `FaceDistance × DistanceFactor` back and tilted 20° down.
-  - Moves between poses use quaternion slerp with OutCubic easing.
-- **Picking a desktop.** The face in front is the one nearest the camera's azimuth, rounding half up.
-- **Desktop images.**
-  - The current desktop is captured just before the cube appears.
-  - Other desktops are built from the wallpaper plus each window's own image, stacked in z-order. Where a window can't be captured, The Cube uses that window's last good image if its size hasn't changed, and leaves it out otherwise.
-  - Animated-wallpaper apps draw in a window inside the desktop's own windows (`Progman`/`WorkerW`), and Windows' wallpaper setting still names the old picture. When such a window is there, The Cube captures a frame of it and uses that instead.
-- **Pager.** One small tool window per taskbar. It never takes focus and shows on every desktop.
-  - Windows 11's Start button isn't a window of its own, so its position comes from UI Automation (`StartButton`), read once a second on a background thread. A centred taskbar moves Start as apps open and close, and the pager follows.
-  - Desktops and windows are read twice a second, and straight away whenever another window comes to the front. That also puts the pager back above the taskbar.
-  - It never covers the Widgets (weather) button, also found with UI Automation (`WidgetsButton`), or your apps. On a centred taskbar, the Start and app buttons are centred as one group, so the group's right end mirrors Start's left edge.
-  - If the gap between the weather and Start is tight, the boxes shrink (to half size at most). If it's still too small, the pager goes just right of the apps, next to the notification area.
-  - It hides while the cube is open and while a full-screen app is in front. With an auto-hide taskbar, Windows reports each move of the taskbar window (`EVENT_OBJECT_LOCATIONCHANGE`) and the pager moves with it, so it slides away and back with the taskbar. Nothing polls while the taskbar stays put.
-
 </details>
 
-## Project layout
+## Help
 
-```
-src/TheCube.Core/     Platform-neutral logic: geometry, camera, animation, controller, hotkeys, settings
-src/TheCube.App/      WPF app: start-up, hotkeys, diagnostics window
-  CubeSession.cs      Opens a cube on every monitor, keeps them in step, switches desktop at the end
-  CubeOverlay.cs      Full-screen window per monitor: 3D cube (Viewport3D), mouse/keyboard input, placeholder
-  TrayIcon.cs         Tray icon and menu, app icon, Start with Windows
-  SettingsWindow.cs   Settings dialog
-  HotkeyManager.cs    Global hotkeys (RegisterHotKey); KeyboardHook.cs is the fallback for ones Windows keeps
-  EdgeWatcher.cs      Screen-edge activation
-  PagerManager.cs     Keeps a pager on every taskbar; PagerWindow.cs draws one and handles clicks/scrolling
-  DiagnosticsWindow.cs  Diagnostics window; DesktopPreviewWindow.cs previews every face
-  EventLog.cs         cube.log (what happened, for bug reports; never window titles)
-  app.manifest        Per-monitor DPI awareness
-  Assets/             Icon (SVG source + .ico)
-  DesktopImages.cs    Builds each desktop's picture per monitor; FaceRenderer turns it into a face brush
-  Interop/            Virtual desktop COM interfaces (one set per Windows version), screen/window
-                      capture, monitors, IDesktopWallpaper, taskbars/Start button, live wallpaper, Win32 calls
-tests/TheCube.Core.Tests/  xUnit tests for Core (run on any OS)
-.github/workflows/     CI: build, test, publish win-x64 exe on windows-latest
-PLAN.md                Phases and what's left
-docs/diagrams/          README diagram: archgram spec, the SVG drawn from it, its colours
-archgram.theme.json    Maps the diagram to the app's colours
-```
+**Win+C opens Copilot instead.** The Cube then uses a keyboard hook. Diagnostics shows whether it's on. If it still fails, pick another shortcut in Settings.
 
-## Development
+**"Windows build … isn't supported".** Please open an issue with the build number from Diagnostics.
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). The WPF app builds on Linux too (`EnableWindowsTargeting`), but it only runs on Windows.
+**Some windows are missing from other desktops' faces.** Some apps (games, some browsers and video players) can't be captured while hidden. Visit that desktop once and they'll show from then on. Minimized windows and desktop icons are never shown.
 
-```sh
-dotnet build TheCube.slnx
-dotnet test TheCube.slnx
-dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o publish
-```
+**It doesn't start with Windows after moving the exe.** Untick and tick Start with Windows again.
 
-## Known limitations
+**The cube or the pager misbehaves.** Send `%APPDATA%\The Cube\cube.log` (Diagnostics, then Open log). Errors are in `error.log` in the same folder.
 
-- The desktop-switching interfaces are undocumented and change between Windows builds. Supported:
-  Windows 10 21H2/22H2 (19044–19045), Windows 11 22H2/23H2 (22621–22631, updated since August 2023) and
-  24H2/25H2 (26100+). Newer builds are tried with the 24H2 interfaces. If Windows has changed them, the app
-  shows a message instead of crashing. Windows Server and Windows 11 21H2 aren't supported.
-- If Explorer restarts, The Cube reconnects automatically.
-- `Ctrl+F1–F4` use Windows' slide animation on Windows 11. Windows 10 has no animated switch.
-- Windows has no live view of other desktops. Their faces are composed when the cube opens, from the wallpaper,
-  the taskbar and each window as Windows renders it (`PrintWindow`). Some GPU-rendered apps (games, some
-  browsers and video players) can't be captured that way. They show their last good image if they were ever
-  captured, and are left out otherwise. Minimized windows are left out, as in Plasma.
-- Desktop icons aren't drawn on other desktops' faces.
-- An animated wallpaper is shown as a still frame on other desktops' faces, and the same frame on every desktop (these apps show one wallpaper on all desktops).
-- Windows doesn't let apps put widgets inside the taskbar, so the pager is a small window on top of it. If the taskbar has no free room left of Start, it moves next to the notification area. It only goes on horizontal taskbars.
-- The skybox background is an approximation: a 360°×180° panorama image that pans as the cube turns,
-  rather than a true 3D environment.
-- Faces of other desktops fill in a moment after the cube opens; until then they're plain grey.
-- Windows may already use Win+C for Copilot. The Cube then falls back to a keyboard hook, and you can pick another hotkey in settings.
-- Screen edges are ignored while a full-screen app is in front, as in Plasma.
+**Removing it.** Untick Start with Windows, quit, then delete `TheCube.exe` and `%APPDATA%\The Cube`.
 
-## Code signing policy
+<details>
+<summary><b>For developers</b></summary>
 
-Releases are built only by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), on GitHub-hosted runners. Nothing is built or signed on anyone's own PC.
+- Build and test with the [.NET 10 SDK](https://dotnet.microsoft.com/download). It builds on Linux too, but only runs on Windows:
 
-- **Signing:** releases are **not signed yet**. The project is preparing to apply to [SignPath Foundation](https://signpath.org/) for free open-source code signing. Once accepted, signed releases will say: *Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).*
-- **Committers and reviewers:** [baverrr](https://github.com/baverrr)
-- **Approvers** (each release must be approved before it's signed): [baverrr](https://github.com/baverrr)
-- **Privacy:** this program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
-- **System changes:** on first run, The Cube asks before it adds virtual desktops or a start-up entry. Both can be changed in **Settings…**, and [removing The Cube](#troubleshooting) is described above.
+  ```sh
+  dotnet build TheCube.slnx
+  dotnet test TheCube.slnx
+  dotnet publish src/TheCube.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:PublishReadyToRun=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=none -o publish
+  ```
 
-Maintainer notes for setting up signing are in [docs/SIGNING.md](docs/SIGNING.md).
+- Logic (geometry, camera, settings) is in [src/TheCube.Core](src/TheCube.Core), the WPF app in [src/TheCube.App](src/TheCube.App), and the Windows desktop interfaces in [Interop/](src/TheCube.App/Interop)
+- How it fits together: [architecture diagram](docs/diagrams/architecture.svg)
+- Supported builds: 19044–19045, 22621–22631 (updated since August 2023) and 26100+. Newer builds try the 24H2 interfaces. Windows Server and Windows 11 21H2 aren't supported
+- Diagnostics in the tray menu shows the interfaces picked, hotkey status and a preview of every face
+- What's left to do: [PLAN.md](PLAN.md). Signing setup: [docs/SIGNING.md](docs/SIGNING.md)
+</details>
 
-## License and privacy
+## License
 
-MIT — see [LICENSE](LICENSE). The behaviour is modelled on KDE's GPL-licensed KWin cube effect,
-but no KWin code is used. The virtual desktop interface definitions are adapted from
-[MScholtes/VirtualDesktop](https://github.com/MScholtes/VirtualDesktop) (MIT); see
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT. See [LICENSE](LICENSE). The behaviour is modelled on KDE's KWin cube effect, but no KWin code is used. The virtual desktop interface definitions are adapted from [MScholtes/VirtualDesktop](https://github.com/MScholtes/VirtualDesktop) (MIT). See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-The Cube makes no network connections and collects nothing. Desktop images stay in memory and are never
-written to disk. `cube.log` stays on your PC. It records what The Cube did, plus window class and process
-names (never window titles), and is rotated at 1 MB (one previous file is kept as `cube.log.old`).
+Privacy: desktop images stay in memory and are never saved. `cube.log` stays on your PC, records window class and process names but never window titles, and is rotated at 1 MB.
+
+<details>
+<summary><b>Code signing policy</b></summary>
+
+- Releases are built only by GitHub Actions from this repository ([release workflow](.github/workflows/release.yml)), on GitHub-hosted runners. Nothing is built or signed on anyone's own PC.
+- Releases are not signed yet. The project is preparing to apply to [SignPath Foundation](https://signpath.org/) for free open-source code signing. Once accepted, signed releases will say: *Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).*
+- Committers and reviewers: [baverrr](https://github.com/baverrr). Approvers (each release must be approved before it's signed): [baverrr](https://github.com/baverrr)
+- This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+- On first run, The Cube asks before it adds virtual desktops or a start-up entry. Both can be changed in Settings.
+</details>
