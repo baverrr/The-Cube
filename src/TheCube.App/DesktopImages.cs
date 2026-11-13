@@ -60,9 +60,26 @@ internal sealed class DesktopImageProvider(WindowsVirtualDesktops desktops)
 
     public TimeSpan LastBuildTime { get; private set; }
 
-    /// <summary>Grab every monitor as it looks now. Call on the UI thread before showing any overlay.</summary>
-    public static Dictionary<MonitorInfo, BitmapSource?> CaptureScreens(IReadOnlyList<MonitorInfo> monitors) =>
-        monitors.ToDictionary(m => m, m => Capture.Screen(m.Bounds));
+    /// <summary>
+    /// Grab every monitor as it looks now, in parallel (whether that's faster shows in the open log's "screens"
+    /// time). Call before showing any overlay; blocks the calling thread until every monitor is copied. A monitor
+    /// that can't be copied gets null. If one copy throws, its own exception comes out (not an AggregateException);
+    /// if several do, an AggregateException. Either way the other monitors' copies are dropped.
+    /// </summary>
+    public static Dictionary<MonitorInfo, BitmapSource?> CaptureScreens(IReadOnlyList<MonitorInfo> monitors)
+    {
+        var shots = new BitmapSource?[monitors.Count];
+        try
+        {
+            Parallel.For(0, monitors.Count, i => shots[i] = Capture.Screen(monitors[i].Bounds));
+        }
+        catch (AggregateException ae) when (ae.InnerExceptions.Count == 1)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ae.InnerExceptions[0]).Throw();
+        }
+
+        return monitors.Select((m, i) => (m, shots[i])).ToDictionary(p => p.m, p => p.Item2);
+    }
 
     /// <summary>
     /// Build scenes for every desktop × monitor. Call on the UI thread (the desktop interfaces are

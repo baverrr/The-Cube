@@ -89,9 +89,8 @@ internal sealed class CubeOverlay : Window
             // appears without a flash.
             var hwnd = new WindowInteropHelper(this).Handle;
             SetDwmFlag(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, true);
-            SetDwmFlag(hwnd, DWMWA_CLOAK, true);
+            CloakResult = SetDwmFlag(hwnd, DWMWA_CLOAK, true);
         };
-        ContentRendered += (_, _) => Dispatcher.BeginInvoke(Reveal, System.Windows.Threading.DispatcherPriority.Background);
         DpiChanged += (_, _) => Dispatcher.BeginInvoke(PlaceOnMonitor);
         Closed += (_, _) => Stop();
     }
@@ -103,16 +102,30 @@ internal sealed class CubeOverlay : Window
     /// <summary>The placeholder's "Add Virtual Desktop" button was clicked.</summary>
     public event Action? AddDesktopRequested;
 
+    /// <summary>
+    /// The window was uncloaked; true if the 300 ms fallback did it because no frame was drawn in time (it may then
+    /// show the background for a moment rather than the screen image).
+    /// </summary>
+    public event Action<bool>? Revealed;
+
+    /// <summary>What hiding (cloaking) the window until its first frame returned: 0 is success.</summary>
+    public int CloakResult { get; private set; }
+
     /// <summary>Open the cube (or the placeholder) zoomed out from <paramref name="current"/>.</summary>
     public void Start(int current, int desktopCount, Brush currentFace)
     {
         // Hold the camera on the screen image until the window is actually visible (see Reveal).
         Controller.Activate(current, desktopCount, Monitor.Bounds.Width, Monitor.Bounds.Height, _clock(), startAnimation: false);
 
-        // In case ContentRendered never comes, don't leave an invisible window grabbing input.
+        // Only a started overlay is ever revealed (a warm-up one never calls Start). In case ContentRendered
+        // never comes, the fallback reveals it anyway rather than leave an invisible window covering the screen.
+        System.Diagnostics.Debug.Assert(!_running && _revealFallback is null, "Start is called once per overlay");
+        ContentRendered += (_, _) => Dispatcher.BeginInvoke(() => Reveal(byFallback: false), System.Windows.Threading.DispatcherPriority.Background);
         _revealFallback = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-        _revealFallback.Tick += (_, _) => Reveal();
-        _revealFallback.Start();
+        _revealFallback.Tick += (_, _) => Reveal(byFallback: true);
+
+        // Count the 300 ms from when the window exists and is laid out: on a slow first open, Show itself can take longer.
+        Loaded += (_, _) => _revealFallback?.Start();
         if (Controller.Geometry is { } geometry)
         {
             BuildFaces(geometry);
@@ -129,11 +142,78 @@ internal sealed class CubeOverlay : Window
         UpdateCamera();
     }
 
-    /// <summary>Uncloak the window (its first frame is drawn) and start zooming out.</summary>
-    private void Reveal()
+    /// <summary>
+    /// Draw a cube on <paramref name="monitor"/> a few times in a window that stays cloaked (invisible), takes no
+    /// input and never takes focus, then close it, so the first real open skips most of the one-time setup (code
+    /// loading, WPF's 3D pipeline, the graphics driver's caches). Gives up after 3 s if nothing is drawn.
+    /// Returns what happened, for the log.
+    /// </summary>
+    public static async Task<string> WarmUpAsync(MonitorInfo monitor, CubeSettings settings, Func<double> clock, Brush face)
+    {
+        var size = $"{monitor.Bounds.Width}x{monitor.Bounds.Height}";
+        var overlay = new CubeOverlay(monitor, settings, clock) { ShowActivated = false, IsEnabled = false, IsHitTestVisible = false };
+        using var timeout = new CancellationTokenSource();
+        var drawn = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contentRendered = false;
+        var ticks = 0;
+        void Tick(object? sender, EventArgs e)
+        {
+            // A few UI frames after the first, giving the render thread time to draw. These are UI-thread events, so
+            // "ok" means WPF drew 3 frames, not that the GPU is proven warm: the first open's log shows that.
+            if (contentRendered && ++ticks >= 3)
+            {
+                drawn.TrySetResult();
+            }
+        }
+
+        // Subscribed before Show and removed in finally, so it can't outlive the warm-up (a Rendering handler
+        // keeps WPF drawing every frame).
+        CompositionTarget.Rendering += Tick;
+        try
+        {
+            // Create the window (which cloaks it in SourceInitialized) without showing it, so a failed cloak is
+            // caught before anything could appear on screen.
+            var hwnd = new WindowInteropHelper(overlay).EnsureHandle();
+            if (overlay.CloakResult != 0)
+            {
+                return $"{size} skipped: couldn't hide the window (DWM error 0x{overlay.CloakResult:X8})";
+            }
+
+            // Never activated and disabled at the Windows level (WPF's IsEnabled/IsHitTestVisible alone don't stop
+            // Windows from activating a clicked window). Not made layered or click-through: that would draw it a
+            // different way from the real cube and warm up the wrong thing. Being cloaked, it isn't clicked anyway,
+            // like windows on other virtual desktops.
+            var ex = (long)NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
+            SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, (nint)(ex | NativeMethods.WS_EX_NOACTIVATE));
+            EnableWindow(hwnd, false);
+
+            // No Rendering handler of the overlay's own: set the camera once layout has given the window a size.
+            overlay.Loaded += (_, _) => overlay.UpdateCamera();
+            overlay.ContentRendered += (_, _) => contentRendered = true;
+            overlay.Controller.Activate(0, CubeGeometry.MinimumFaces + 1, monitor.Bounds.Width, monitor.Bounds.Height, clock(), startAnimation: false);
+            if (overlay.Controller.Geometry is { } geometry)
+            {
+                overlay.BuildFaces(geometry);
+                overlay.SetFace(0, face);
+            }
+
+            overlay.Show();
+            var first = await Task.WhenAny(drawn.Task, Task.Delay(3000, timeout.Token));
+            return first == drawn.Task ? $"{size} ok" : $"{size} not drawn within 3 s";
+        }
+        finally
+        {
+            CompositionTarget.Rendering -= Tick;
+            timeout.Cancel();
+            overlay.Close();
+        }
+    }
+
+    /// <summary>Uncloak the window (its first frame is drawn) and start zooming out. Only started overlays get here.</summary>
+    private void Reveal(bool byFallback)
     {
         _revealFallback?.Stop();
-        if (_revealed)
+        if (_revealed || !IsLoaded) // already shown, or closed before the queued reveal ran
         {
             return;
         }
@@ -146,6 +226,7 @@ internal sealed class CubeOverlay : Window
         }
 
         Controller.BeginOpenAnimation(_clock());
+        Revealed?.Invoke(byFallback);
     }
 
     public void SetFace(int desktop, Brush brush)
@@ -204,7 +285,13 @@ internal sealed class CubeOverlay : Window
             : $"At least 3 virtual desktops are required to display the Cube, but only {desktopCount} are present";
 
         var add = new Button { Content = "Add Virtual Desktop", Padding = new Thickness(14, 6, 14, 6), HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 16, 0, 0) };
-        add.Click += (_, _) => AddDesktopRequested?.Invoke();
+        add.Click += (_, _) =>
+        {
+            if (_revealed) // no input while still invisible
+            {
+                AddDesktopRequested?.Invoke();
+            }
+        };
 
         var panel = new StackPanel { HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, MaxWidth = 600 };
         panel.Children.Add(new TextBlock { Text = "▦", FontSize = 64, Foreground = Brushes.Gray, HorizontalAlignment = HorizontalAlignment.Center });
@@ -255,7 +342,7 @@ internal sealed class CubeOverlay : Window
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs e)
     {
         base.OnMouseLeftButtonDown(e);
-        if (!Controller.Activated)
+        if (!Controller.Activated || !_revealed) // no input while still invisible
         {
             return;
         }
@@ -325,7 +412,7 @@ internal sealed class CubeOverlay : Window
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);
-        if (Controller.Activated && Controller.Geometry is not null)
+        if (_revealed && Controller.Activated && Controller.Geometry is not null)
         {
             Controller.Camera.Wheel(e.Delta, inverted: false, _clock());
         }
@@ -344,7 +431,7 @@ internal sealed class CubeOverlay : Window
             _ => null,
         };
 
-        if (key is { } k && Controller.KeyPressed(k, _clock()))
+        if (_revealed && key is { } k && Controller.KeyPressed(k, _clock()))
         {
             e.Handled = true;
         }
@@ -407,10 +494,18 @@ internal sealed class CubeOverlay : Window
     private const int DWMWA_TRANSITIONS_FORCEDISABLED = 3;
     private const int DWMWA_CLOAK = 13;
 
-    private static void SetDwmFlag(nint hwnd, int attribute, bool value)
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnableWindow(nint hwnd, [MarshalAs(UnmanagedType.Bool)] bool enable);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+    private static extern nint SetWindowLongPtr(nint hwnd, int index, nint value);
+
+    /// <returns>The HRESULT: 0 on success.</returns>
+    private static int SetDwmFlag(nint hwnd, int attribute, bool value)
     {
         var v = value ? 1 : 0;
-        DwmSetWindowAttribute(hwnd, attribute, ref v, sizeof(int));
+        return DwmSetWindowAttribute(hwnd, attribute, ref v, sizeof(int));
     }
 
     [DllImport("dwmapi.dll")]

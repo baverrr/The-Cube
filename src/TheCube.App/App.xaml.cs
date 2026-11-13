@@ -25,6 +25,7 @@ public partial class App : Application
     private RegisteredWaitHandle? _showWait;
     private HotkeyManager? _hotkeys;
     private KeyboardHook? _keyboardHook;
+    private readonly RestartBudget _hookRestarts = new(3, TimeSpan.FromHours(1)); // automatic hook restarts
     private EdgeWatcher? _edges;
     private PagerManager? _pager;
     private TrayIcon? _tray;
@@ -164,6 +165,26 @@ public partial class App : Application
             var hotkey = string.IsNullOrWhiteSpace(Settings.ToggleCubeHotkey) ? "the tray icon" : Settings.ToggleCubeHotkey;
             _tray.ShowBalloon("The Cube is running", $"Press {hotkey} to open the cube. Right-click the tray icon for settings.");
         }
+
+        // When the UI is first idle, do the first open's slow one-time setup out of sight.
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            try
+            {
+                if (Cube is { IsOpen: false } cube)
+                {
+                    await cube.WarmUpAsync(); // logs its own failures
+                }
+                else
+                {
+                    EventLog.Write($"warm-up skipped: {(Cube is null ? "no cube session" : "the cube is already open")}");
+                }
+            }
+            catch (Exception ex)
+            {
+                EventLog.Write("warm-up failed: " + ex); // the task is discarded, so nothing else would see this
+            }
+        }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
     }
 
     /// <summary>
@@ -272,12 +293,15 @@ public partial class App : Application
         }
     }
 
+    /// <summary>
+    /// Turn the shortcuts off. The keyboard hook itself stays installed with no hotkeys, so a hotkey press it hid
+    /// still gets its release hidden; a new hook would let that release through without its press.
+    /// </summary>
     private void UnregisterHotkeys()
     {
         _hotkeys?.Dispose();
         _hotkeys = null;
-        _keyboardHook?.Dispose();
-        _keyboardHook = null;
+        _keyboardHook?.Clear();
     }
 
     private void RegisterHotkeys()
@@ -291,7 +315,17 @@ public partial class App : Application
         }
 
         _hotkeys = new HotkeyManager();
-        _keyboardHook = new KeyboardHook(Dispatcher);
+        if (_keyboardHook is not { IsUsable: true })
+        {
+            _keyboardHook?.Dispose();
+            _keyboardHook = new KeyboardHook(Dispatcher, OnKeyboardHookStopped);
+        }
+        else
+        {
+            _keyboardHook.Reinstall(); // in case Windows removed it for answering too slowly
+        }
+
+        var hook = _keyboardHook;
 
         void Add(string text, Action action)
         {
@@ -301,13 +335,13 @@ public partial class App : Application
             }
 
             // Windows (or another app) owns it: take it with the keyboard hook instead.
-            if (Hotkey.TryParse(text, out var hotkey) && _keyboardHook.Add(hotkey, action))
+            if (Hotkey.TryParse(text, out var hotkey) && hook.Add(hotkey, action))
             {
                 HookedHotkeys.Add(hotkey.ToString());
             }
             else
             {
-                HotkeyProblems.Add(problem);
+                HotkeyProblems.Add(hook.LastError is { } error ? $"{problem}; the keyboard-hook fallback isn't working either ({error})" : problem);
             }
         }
 
@@ -323,6 +357,32 @@ public partial class App : Application
         }
 
         EventLog.Write($"hotkeys: via keyboard hook=[{string.Join(", ", HookedHotkeys)}] problems=[{string.Join(" | ", HotkeyProblems)}]");
+    }
+
+    /// <summary>
+    /// The keyboard hook's thread stopped on its own: set the hotkeys up again, at most 3 times an hour, and tell the
+    /// user if any hotkey depended on it.
+    /// </summary>
+    private void OnKeyboardHookStopped(string reason)
+    {
+        if (HookedHotkeys.Count == 0)
+        {
+            return; // nothing depended on it; the next RegisterHotkeys makes a new one if needed
+        }
+
+        var hooked = string.Join(", ", HookedHotkeys);
+
+        if (!_hookRestarts.TryRestart(TimeSpan.FromMilliseconds(Environment.TickCount64)))
+        {
+            // Saving the shortcuts or restarting The Cube still makes a new hook; only the automatic retry stops.
+            ReportFailure($"The keyboard hook keeps stopping ({reason}), so {hooked} won't work until the shortcuts are saved again or The Cube is restarted.");
+            HotkeyProblems.AddRange(HookedHotkeys.Select(h => $"{h}: the keyboard hook keeps stopping ({reason})"));
+            HookedHotkeys.Clear();
+            return;
+        }
+
+        ReportFailure($"The keyboard hook stopped ({reason}); setting up {hooked} again.");
+        RegisterHotkeys();
     }
 
     /// <summary>Log a status message and show it in the Diagnostics window if that's open.</summary>
@@ -440,6 +500,8 @@ public partial class App : Application
         _edges?.Dispose();
         _pager?.Dispose();
         UnregisterHotkeys();
+        _keyboardHook?.Dispose();
+        _keyboardHook = null;
         _showWait?.Unregister(null);
         _showEvent?.Dispose();
         _singleInstance?.Dispose();

@@ -26,6 +26,12 @@ internal sealed class CubeSession
     private double _openedAt = double.NegativeInfinity;
     private double _closingSince = double.NaN;
     private CubeOverlay? _focused;
+    private readonly FrameStats _frames = new();
+    private bool _countingFrames;
+    private double _openStartedAt;
+    private bool _revealLogged;
+    private bool _warmingUp;
+    private bool _openedDuringWarmUp;
 
     public CubeSession(App app)
     {
@@ -41,6 +47,61 @@ internal sealed class CubeSession
     public bool IsOpen => _overlays.Count > 0;
 
     private double Now() => _clock.Elapsed.TotalMilliseconds;
+
+    /// <summary>
+    /// Do most of the slow one-time work of a first open (code loading, WPF's 3D pipeline, the graphics driver's
+    /// caches) with invisible windows, so the first real open is closer to the speed of later ones.
+    /// Never throws: it's only a head start, so a failure just leaves the first open slower, and is logged.
+    /// Safe to overlap with a real open: these windows aren't in the session's list.
+    /// </summary>
+    public async Task WarmUpAsync()
+    {
+        _warmingUp = true;
+        _openedDuringWarmUp = false;
+        try
+        {
+            var clock = Stopwatch.StartNew();
+            var tier = RenderCapability.Tier >> 16; // high word: 2 = most drawing on the GPU, 1 = some, 0 = software
+            var monitors = Monitors.All();
+            var screens = DesktopImageProvider.CaptureScreens(monitors);
+            var captured = clock.ElapsedMilliseconds;
+            var missing = screens.Values.Count(s => s is null);
+            var results = await Task.WhenAll(monitors.Select(async monitor =>
+            {
+                try
+                {
+                    Brush face = screens.GetValueOrDefault(monitor) is { } shot ? new ImageBrush(shot) { Stretch = Stretch.Fill } : new SolidColorBrush(Colors.Black);
+                    face.Freeze();
+                    return await CubeOverlay.WarmUpAsync(monitor, _app.Settings, Now, face);
+                }
+                catch (Exception ex)
+                {
+                    return $"{monitor.Bounds.Width}x{monitor.Bounds.Height} failed: {ex}";
+                }
+            }));
+            EventLog.Write($"warm-up in {clock.ElapsedMilliseconds} ms (screens {captured} ms{(missing > 0 ? $", {missing} not captured" : "")}), render tier {tier}{(_openedDuringWarmUp ? ", overlapped a real open" : "")}: {string.Join("; ", results)}");
+        }
+        catch (Exception ex)
+        {
+            EventLog.Write("warm-up failed: " + ex);
+        }
+        finally
+        {
+            _warmingUp = false;
+        }
+    }
+
+    /// <summary>
+    /// Count one UI frame tick, by WPF's own frame time: Rendering can be raised more than once per frame, and
+    /// those repeats carry the same time, so <see cref="FrameStats"/> skips them.
+    /// </summary>
+    private void CountFrame(object? sender, EventArgs e)
+    {
+        if (e is RenderingEventArgs rendering)
+        {
+            _frames.RecordFrame(rendering.RenderingTime.TotalMilliseconds);
+        }
+    }
 
     private double Duration => _app.Settings.AnimationDurationMs;
 
@@ -127,11 +188,17 @@ internal sealed class CubeSession
             {
                 _opening = false; // a newer open owns the flag otherwise
             }
+
+            if (!IsOpen)
+            {
+                StopCountingFrames(); // a failed open with no cube left: don't keep WPF drawing every frame
+            }
         }
     }
 
     private async Task OpenCoreAsync(nint? previousForeground)
     {
+        var phase = Stopwatch.StartNew();
         if (_app.Desktops is not { } desktops || _app.Images is not { } images)
         {
             EventLog.Write("open: no virtual desktops");
@@ -153,6 +220,7 @@ internal sealed class CubeSession
         }
 
         var generation = ++_generation;
+        _openedDuringWarmUp |= _warmingUp;
         _closingSince = double.NaN;
         _previousForeground = previousForeground ?? GetForegroundWindow();
         _switchTarget = null;
@@ -160,9 +228,10 @@ internal sealed class CubeSession
 
         // Grab the screens before any overlay covers them; the current face starts as this exact image,
         // so the zoom-out begins from what was on screen.
+        var desktopsMs = phase.ElapsedMilliseconds;
         var monitors = Monitors.All();
         var screens = DesktopImageProvider.CaptureScreens(monitors);
-        EventLog.Write($"open: desktops={count} current={current + 1} monitors={monitors.Count} foreground={EventLog.ForegroundWindow()}");
+        var captureMs = phase.ElapsedMilliseconds;
 
         // Create and start every monitor's cube before showing any, so all of them are in _overlays
         // before focus can move and OnAppDeactivated runs.
@@ -174,11 +243,22 @@ internal sealed class CubeSession
             overlay.Controller.SwitchRequested += desktop => _switchTarget = desktop;
             overlay.Controller.Hidden += OnOverlayHidden;
             overlay.AddDesktopRequested += AddDesktopAndReopen;
+            overlay.Revealed += byFallback => OnRevealed(generation, byFallback);
             created.Add(overlay);
         }
 
         _overlays.AddRange(created);
         _openedAt = Now();
+        _openStartedAt = _openedAt - phase.Elapsed.TotalMilliseconds;
+        _revealLogged = false;
+
+        // Count frames from before the first one is drawn, so a slow first frame shows up too.
+        _frames.Reset();
+        if (!_countingFrames)
+        {
+            CompositionTarget.Rendering += CountFrame; // removed on close: any Rendering handler keeps WPF drawing every frame
+            _countingFrames = true;
+        }
         foreach (var overlay in created)
         {
             Brush face = screens.GetValueOrDefault(overlay.Monitor) is { } shot
@@ -188,10 +268,13 @@ internal sealed class CubeSession
             overlay.Start(current, count, face);
         }
 
+        var startMs = phase.ElapsedMilliseconds;
         foreach (var overlay in created)
         {
             overlay.Show();
         }
+
+        var showMs = phase.ElapsedMilliseconds;
 
         // Keyboard goes to the monitor under the pointer, as in Plasma.
         GetCursorPos(out var cursor);
@@ -201,7 +284,11 @@ internal sealed class CubeSession
             FocusOverlay(_focused);
         }
 
-        EventLog.Write($"open: shown, foreground={EventLog.ForegroundWindow()}");
+        // Windows are created and queued for drawing here, not yet visible: OnRevealed logs when they are.
+        var queuedMs = phase.ElapsedMilliseconds;
+        EventLog.Write($"open: desktops={count} current={current + 1} monitors={monitors.Count}{(screens.Values.Any(s => s is null) ? " (a screen wasn't captured)" : "")}, queued in {queuedMs} ms " +
+                       $"(desktops {desktopsMs}, screens {captureMs - desktopsMs}, create+start {startMs - captureMs}, show {showMs - startMs}, focus {queuedMs - showMs}), " +
+                       $"previous foreground 0x{_previousForeground:X}, now {EventLog.ForegroundWindow()}");
 
         if (count < CubeGeometry.MinimumFaces)
         {
@@ -223,12 +310,13 @@ internal sealed class CubeSession
         }
 
         EventLog.Write($"faces captured in {images.LastBuildTime.TotalMilliseconds:0} ms");
-
         if (generation != _generation || !IsOpen)
         {
-            return; // closed (or reopened) while capturing
+            EventLog.Write("faces discarded: the cube closed or reopened while they were captured");
+            return;
         }
 
+        var applyStart = Now();
         foreach (var scene in scenes)
         {
             if (scene.IsCurrent)
@@ -238,6 +326,37 @@ internal sealed class CubeSession
 
             _overlays.FirstOrDefault(o => o.Monitor == scene.Monitor)?.SetFace(scene.Desktop, FaceRenderer.ToBrush(scene));
         }
+
+        var applied = Now();
+        EventLog.Write($"faces applied in {applied - applyStart:0} ms, {applied - _openStartedAt:0} ms after the open started");
+    }
+
+    private void StopCountingFrames()
+    {
+        if (_countingFrames)
+        {
+            CompositionTarget.Rendering -= CountFrame;
+            _countingFrames = false;
+
+            // UI-thread ticks for all monitors together, from open to close (animations and idle time alike).
+            var where = _overlays.Count > 0 ? $"{_overlays.Count} monitors" : "open failed";
+            EventLog.Write($"frames while open ({where}): {_frames.Summary()}");
+        }
+    }
+
+    /// <summary>
+    /// Log when the cube first became visible (uncloaked; on screen about one frame later), which is what the user
+    /// waits for after the hotkey, and any monitor that was only shown by the fallback.
+    /// </summary>
+    private void OnRevealed(int generation, bool byFallback)
+    {
+        if (generation != _generation || (_revealLogged && !byFallback))
+        {
+            return;
+        }
+
+        _revealLogged = true;
+        EventLog.Write($"open: uncloaked {Now() - _openStartedAt:0} ms after the open started{(byFallback ? " (no frame drawn within 300 ms; shown anyway)" : "")}");
     }
 
     private void FollowClose(CubeOverlay source, int desktop)
@@ -294,6 +413,8 @@ internal sealed class CubeSession
 
     private void CloseOverlays()
     {
+        StopCountingFrames();
+
         foreach (var overlay in _overlays)
         {
             overlay.Stop();

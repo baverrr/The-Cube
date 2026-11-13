@@ -7,10 +7,25 @@ namespace TheCube.App;
 
 /// <summary>
 /// Fallback for hotkeys Windows won't let us register (e.g. Win+C when Windows keeps it for Copilot):
-/// a low-level keyboard hook that sees the key first, swallows it and runs the action.
+/// a low-level keyboard hook that sees the key before apps and registered hotkeys, hides it (the rules are in
+/// <see cref="HotkeyFilter"/>) and runs the action.
 /// The hook runs on its own thread with its own message loop: Windows silently removes a low-level hook
-/// that answers too slowly, and the UI thread can be busy for a moment while the cube opens.
+/// that answers too slowly, and the UI thread can be busy for a moment while the cube opens. For the same reason
+/// nothing on the hook thread writes the log file; it goes through the UI thread.
+/// One instance lives as long as the app (hotkey changes go through <see cref="Clear"/> and <see cref="Add"/>), so
+/// a hotkey press it hid still gets its release hidden after the hotkeys change.
 /// </summary>
+/// <remarks>
+/// Known limits:
+/// <list type="bullet">
+/// <item>It isn't called while UAC or the lock screen is up, or (unless The Cube runs as admin) while an admin window
+/// has the keyboard, so the hotkey does nothing there.</item>
+/// <item>Injected key presses (the on-screen keyboard, key remappers, other apps) never fire a hotkey.</item>
+/// <item>If Windows removes the hook for answering too slowly, nothing notices until the hotkeys are set up again
+/// (saving settings, recording a shortcut, or restarting The Cube), which reinstalls it through <see cref="Reinstall"/>.
+/// Watching for it would mean sending a test key now and then, which every app (games included) would see.</item>
+/// </list>
+/// </remarks>
 internal sealed class KeyboardHook : IDisposable
 {
     private const int WH_KEYBOARD_LL = 13;
@@ -19,75 +34,200 @@ internal sealed class KeyboardHook : IDisposable
     private const int WM_SYSKEYDOWN = 0x0104;
     private const int WM_SYSKEYUP = 0x0105;
     private const uint LLKHF_INJECTED = 0x10;
-    private const ushort VK_SHIFT = 0x10, VK_CONTROL = 0x11, VK_MENU = 0x12, VK_LWIN = 0x5B, VK_RWIN = 0x5C;
 
-    /// <summary>An unassigned virtual key, sent so that releasing Win doesn't open the Start menu.</summary>
+    /// <summary>An unassigned virtual key, tapped so that releasing Win or Alt doesn't open Start or a menu bar.</summary>
     private const ushort VK_NONE = 0xE8;
 
     private const uint WM_QUIT = 0x0012;
+    private const uint WM_REINSTALL = 0x8000 + 1; // WM_APP + 1, posted to the hook thread
+    private const int ERROR_INVALID_THREAD_ID = 1444;
 
     private readonly Dispatcher _dispatcher;
+    private readonly Action<string> _stoppedUnexpectedly;
     private readonly HookProc _proc;
-    private volatile (Hotkey Key, Action Action)[] _entries = []; // replaced whole, read on the hook thread
-    private Thread? _thread;
-    private uint _threadId;
+    private readonly HotkeyFilter _filter = new(); // touched only on the hook thread
+    private volatile Entries _entries = Entries.Empty; // replaced whole, read on the hook thread
+    private Thread? _thread; // UI thread only
+    private uint _threadId; // written on the hook thread before installed.Set(), read after Wait()
     private nint _hook; // touched only on the hook thread
-    private uint? _heldKey; // touched only on the hook thread
-    private bool _failed;
+    private bool _disposed; // UI thread only
+    private volatile bool _stopping; // Dispose asked the hook thread to stop
+    private volatile bool _ended; // the hook thread's message loop has stopped, so the hook is gone
+    private int _errors; // callback errors so far, counted on the hook thread
+    private volatile int _generation; // bumped by Clear, so actions queued before it don't run after it
 
-    public KeyboardHook(Dispatcher dispatcher)
+    /// <summary>The hooked hotkeys and their actions, at matching positions; never changed once made.</summary>
+    private sealed class Entries
+    {
+        public static readonly Entries Empty = new([], []);
+
+        private readonly Hotkey[] _keys;
+        private readonly Action[] _actions;
+
+        public Entries(Hotkey[] keys, Action[] actions)
+        {
+            if (keys.Length != actions.Length)
+            {
+                throw new ArgumentException("Every hotkey needs exactly one action.", nameof(actions));
+            }
+
+            _keys = keys;
+            _actions = actions;
+        }
+
+        public IReadOnlyList<Hotkey> Keys => _keys;
+
+        public Action ActionAt(int index) => _actions[index];
+
+        public bool HasKey(uint vk)
+        {
+            foreach (var key in _keys)
+            {
+                if (key.VirtualKey == vk)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public Entries With(Hotkey key, Action action) => new([.. _keys, key], [.. _actions, action]);
+    }
+
+    /// <param name="dispatcher">The UI thread, where actions and log writes run.</param>
+    /// <param name="stoppedUnexpectedly">Called on the UI thread, with the reason, if the hook stops without <see cref="Dispose"/>.</param>
+    public KeyboardHook(Dispatcher dispatcher, Action<string> stoppedUnexpectedly)
     {
         _dispatcher = dispatcher;
+        _stoppedUnexpectedly = stoppedUnexpectedly;
         _proc = Callback; // keep the delegate alive while the hook is installed
     }
 
-    public int Count => _entries.Length;
+    public int Count => _entries.Keys.Count;
 
-    /// <summary>Handle <paramref name="hotkey"/> through the hook. Returns false if the hook can't be installed.</summary>
+    /// <summary>Why the hook couldn't start or stopped, if it did.</summary>
+    public string? LastError { get; private set; }
+
+    /// <summary>Whether <see cref="Add"/> can still work: the hook hasn't failed, stopped or been disposed.</summary>
+    public bool IsUsable => LastError is null && !_ended && !_disposed;
+
+    /// <summary>Handle <paramref name="hotkey"/> through the hook, starting it if needed. Returns false if it can't run.</summary>
     public bool Add(Hotkey hotkey, Action action)
     {
-        if (_failed || (_thread is null && !Start()))
+        if (!IsUsable || (_thread is null && !Start()))
         {
             return false;
         }
 
-        _entries = [.. _entries, (hotkey, action)];
+        _entries = _entries.With(hotkey, action);
         return true;
+    }
+
+    /// <summary>Stop handling all hotkeys, but keep the hook so hidden presses still get their releases hidden.</summary>
+    public void Clear()
+    {
+        _entries = Entries.Empty;
+        _generation++; // UI thread only
+    }
+
+    /// <summary>
+    /// Install the hook again on its own thread (keeping what the filter tracks), in case Windows removed it for
+    /// answering too slowly. Does nothing if the hook isn't running.
+    /// </summary>
+    public void Reinstall()
+    {
+        if (_thread is not null && !_ended && !_disposed && !PostThreadMessage(_threadId, WM_REINSTALL, 0, 0))
+        {
+            EventLog.Write($"keyboard hook: couldn't ask for a reinstall (error {Marshal.GetLastWin32Error()})");
+        }
+    }
+
+    /// <summary>On the hook thread: remove the hook (noticing if Windows already had) and set it again.</summary>
+    private string? ReinstallOnHookThread()
+    {
+        if (!UnhookWindowsHookEx(_hook))
+        {
+            Log($"keyboard hook: Windows had removed it (error {Marshal.GetLastWin32Error()}), so the hooked hotkeys weren't working before now");
+        }
+
+        _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(null), 0);
+        return _hook == 0 ? $"reinstalling it failed, error {Marshal.GetLastWin32Error()}" : null;
     }
 
     private bool Start()
     {
         using var installed = new ManualResetEventSlim();
-        var ok = false;
+        string? error = null;
         _thread = new Thread(() =>
         {
-            _threadId = GetCurrentThreadId();
-            using (var module = Process.GetCurrentProcess().MainModule)
+            try
             {
-                _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(module?.ModuleName), 0);
+                _threadId = GetCurrentThreadId();
+
+                // A low-level hook needs no DLL of its own: any module handle of this process will do.
+                _hook = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(null), 0);
+                if (_hook == 0)
+                {
+                    error = $"SetWindowsHookEx failed, error {Marshal.GetLastWin32Error()}";
+                }
+            }
+            catch (Exception ex)
+            {
+                error = $"{ex.GetType().Name}: {ex.Message}"; // anything here just means no fallback
+            }
+            finally
+            {
+                installed.Set();
             }
 
-            ok = _hook != 0;
-            if (!ok)
-            {
-                EventLog.Write($"keyboard hook: SetWindowsHookEx failed, error {Marshal.GetLastWin32Error()}");
-            }
-
-            installed.Set();
-            if (!ok)
+            if (error is not null)
             {
                 return;
             }
 
             // The hook is called through this thread's message loop.
-            while (GetMessage(out var msg, 0, 0, 0) > 0)
+            int result;
+            string? reason = null;
+            while ((result = GetMessage(out var msg, 0, 0, 0)) > 0)
             {
+                if (msg.hwnd == 0 && msg.message == WM_REINSTALL)
+                {
+                    if ((reason = ReinstallOnHookThread()) is not null)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
                 TranslateMessage(ref msg);
                 DispatchMessage(ref msg);
             }
 
-            UnhookWindowsHookEx(_hook);
+            var loopError = result < 0 ? Marshal.GetLastWin32Error() : 0;
+            var unhooked = _hook == 0 || UnhookWindowsHookEx(_hook);
+            var unhookError = unhooked ? 0 : Marshal.GetLastWin32Error();
             _hook = 0;
+            _ended = true;
+            if (!unhooked)
+            {
+                Log($"keyboard hook: Windows had already removed it (error {unhookError}), so the hooked hotkeys weren't working before this");
+            }
+
+            if (!_stopping)
+            {
+                reason ??= result < 0 ? $"its message loop failed, error {loopError}" : "its thread was told to quit";
+                _dispatcher.BeginInvoke(() =>
+                {
+                    LastError = reason;
+                    EventLog.Write($"keyboard hook: stopped unexpectedly: {reason}");
+                    if (!_disposed) // already replaced: nothing to report or restart
+                    {
+                        _stoppedUnexpectedly(reason);
+                    }
+                });
+            }
         })
         {
             IsBackground = true,
@@ -95,43 +235,64 @@ internal sealed class KeyboardHook : IDisposable
         };
         _thread.Start();
         installed.Wait();
-        if (!ok)
+        if (error is not null)
         {
-            _failed = true;
+            LastError = error;
+            EventLog.Write($"keyboard hook: couldn't start: {error}");
             _thread = null;
+            return false;
         }
 
-        return ok;
+        EventLog.Write("keyboard hook: installed");
+        return true;
     }
 
     private nint Callback(int code, nint wParam, nint lParam)
     {
         if (code >= 0)
         {
-            var info = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-            var message = (int)wParam;
-            if ((info.flags & LLKHF_INJECTED) == 0)
+            var vk = 0u;
+            var keyDown = false;
+            try
             {
-                if (message is WM_KEYUP or WM_SYSKEYUP && info.vkCode == _heldKey)
-                {
-                    _heldKey = null;
-                    return 1; // swallow the release of a key whose press we swallowed
-                }
+                // KBDLLHOOKSTRUCT: vkCode at 0, flags at 8, time at 12. Read in place, without allocating.
+                vk = (uint)Marshal.ReadInt32(lParam, 0);
+                var flags = (uint)Marshal.ReadInt32(lParam, 8);
+                var time = (uint)Marshal.ReadInt32(lParam, 12);
+                var message = (int)wParam;
+                keyDown = message is WM_KEYDOWN or WM_SYSKEYDOWN;
+                var keyUp = message is WM_KEYUP or WM_SYSKEYUP;
 
-                if (message is WM_KEYDOWN or WM_SYSKEYDOWN && Match(info.vkCode) is { } match)
+                // Injected events (the on-screen keyboard, remappers, other apps, our own dummy key) aren't the
+                // user's physical keys: they go through untouched and never change what the filter tracks.
+                if ((flags & LLKHF_INJECTED) == 0 && (keyDown || keyUp))
                 {
-                    if (_heldKey != info.vkCode) // ignore auto-repeat while held
+                    var decision = keyUp ? _filter.OnKeyUp(vk) : OnKeyDown(vk, time);
+                    if (decision != HookDecision.Pass)
                     {
-                        _heldKey = info.vkCode;
-                        if (match.Key.Modifiers.HasFlag(HotkeyModifiers.Win))
-                        {
-                            TapDummyKey();
-                        }
-
-                        _dispatcher.BeginInvoke(match.Action);
+                        return 1;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // An exception escaping a native callback ends the whole app, so let the key through instead, and
+                // make the filter agree, or it would hide this press's repeats and release from Windows.
+                try
+                {
+                    if (keyDown)
+                    {
+                        _filter.Forget(vk);
                     }
 
-                    return 1;
+                    if (++_errors is 1 or 10 or 100 or 1000)
+                    {
+                        Log($"keyboard hook: error #{_errors}, key let through: {ex.GetType().Name}: {ex.Message}");
+                    }
+                }
+                catch
+                {
+                    // Nothing more can be done here without risking the app; the key still goes through.
                 }
             }
         }
@@ -139,64 +300,113 @@ internal sealed class KeyboardHook : IDisposable
         return CallNextHookEx(_hook, code, wParam, lParam);
     }
 
-    private (Hotkey Key, Action Action)? Match(uint vk)
+    private HookDecision OnKeyDown(uint vk, uint time)
     {
-        var mods = CurrentModifiers();
-        foreach (var entry in _entries)
+        var entries = _entries;
+        if (!_filter.IsHeld(vk) && !entries.HasKey(vk))
         {
-            if (entry.Key.VirtualKey == vk && entry.Key.Modifiers == mods)
+            return HookDecision.Pass; // not a hotkey's key: answer at once, as for almost every key
+        }
+
+        // In a low-level hook, GetAsyncKeyState still shows the state from before this event (the hook runs before
+        // Windows updates it), and a press the hook hid never reaches it. So "down" means an earlier press of this
+        // key got through, and this is usually its auto-repeat.
+        var result = _filter.OnKeyDown(vk, HotkeyFilter.ModifiersFrom(Down), Down(vk), entries.Keys, time);
+        if (result.ReleaseWasLost)
+        {
+            Log($"keyboard hook: the release of hidden key 0x{vk:X2} probably never arrived; judging this as a new press");
+        }
+
+        if (result.Decision == HookDecision.Fire)
+        {
+            // The decision is final once the filter made it: a failure below must not let the press through.
+            try
             {
-                return entry;
+                if ((entries.Keys[result.Index].Modifiers & (HotkeyModifiers.Win | HotkeyModifiers.Alt)) != 0)
+                {
+                    TapDummyKey();
+                }
+
+                var action = entries.ActionAt(result.Index);
+                var generation = _generation;
+                _dispatcher.BeginInvoke(() =>
+                {
+                    if (generation == _generation) // not cleared meanwhile (e.g. a shortcut is being recorded)
+                    {
+                        action();
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    Log($"keyboard hook: couldn't run the hotkey {entries.Keys[result.Index]}: {ex.GetType().Name}: {ex.Message}");
+                }
+                catch
+                {
+                    // The log goes through the same dispatcher that just failed; the press stays hidden either way.
+                }
             }
         }
 
-        return null;
+        return result.Decision;
     }
 
-    private static HotkeyModifiers CurrentModifiers()
-    {
-        static bool Down(ushort vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
-        var mods = HotkeyModifiers.None;
-        if (Down(VK_CONTROL)) mods |= HotkeyModifiers.Ctrl;
-        if (Down(VK_MENU)) mods |= HotkeyModifiers.Alt;
-        if (Down(VK_SHIFT)) mods |= HotkeyModifiers.Shift;
-        if (Down(VK_LWIN) || Down(VK_RWIN)) mods |= HotkeyModifiers.Win;
-        return mods;
-    }
+    private static bool Down(uint vk) => (GetAsyncKeyState((int)vk) & 0x8000) != 0;
 
-    private static void TapDummyKey()
+    /// <summary>Write to the log from any thread, through the UI thread (best effort: lost if the app is exiting).</summary>
+    private void Log(string text) => _dispatcher.BeginInvoke(() => EventLog.Write(text));
+
+    private void TapDummyKey()
     {
+        // INPUT below is laid out for 64-bit processes only (The Cube is published for win-x64).
+        Debug.Assert(Marshal.SizeOf<INPUT>() == 40, "INPUT layout is wrong for this process");
         var inputs = new INPUT[]
         {
             new() { type = 1, ki = new KEYBDINPUT { wVk = VK_NONE } },
             new() { type = 1, ki = new KEYBDINPUT { wVk = VK_NONE, dwFlags = 0x2 /* KEYEVENTF_KEYUP */ } },
         };
-        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>()) != inputs.Length)
+        {
+            Log($"keyboard hook: couldn't send the dummy key (error {Marshal.GetLastWin32Error()}); Start or a menu bar may open when Win or Alt is released");
+        }
     }
 
     public void Dispose()
     {
-        if (_thread is { } thread)
+        if (_disposed)
         {
-            PostThreadMessage(_threadId, WM_QUIT, 0, 0);
-            thread.Join(TimeSpan.FromSeconds(2));
-            _thread = null;
+            return;
         }
 
-        _entries = [];
+        _disposed = true;
+        _entries = Entries.Empty; // stop firing at once, even if the thread is slow to stop
+        if (_thread is { } thread)
+        {
+            _stopping = true;
+            if (!_ended && !PostThreadMessage(_threadId, WM_QUIT, 0, 0))
+            {
+                var error = Marshal.GetLastWin32Error();
+                if (!(_ended || error == ERROR_INVALID_THREAD_ID)) // the thread ended on its own meanwhile
+                {
+                    EventLog.Write($"keyboard hook: couldn't ask the hook thread to stop (error {error})");
+                }
+            }
+            else if (!thread.Join(TimeSpan.FromSeconds(2)))
+            {
+                EventLog.Write("keyboard hook: the hook thread didn't stop within 2 s; its hook may still be installed");
+            }
+            else
+            {
+                EventLog.Write("keyboard hook: removed"); // written here: at exit the UI thread no longer runs queued work
+            }
+
+            _thread = null;
+        }
     }
 
     private delegate nint HookProc(int code, nint wParam, nint lParam);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct KBDLLHOOKSTRUCT
-    {
-        public uint vkCode;
-        public uint scanCode;
-        public uint flags;
-        public uint time;
-        public nint dwExtraInfo;
-    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct KEYBDINPUT
@@ -226,7 +436,8 @@ internal sealed class KeyboardHook : IDisposable
     [DllImport("user32.dll", SetLastError = true)]
     private static extern nint SetWindowsHookEx(int idHook, HookProc lpfn, nint hMod, uint dwThreadId);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool UnhookWindowsHookEx(nint hhk);
 
     [DllImport("user32.dll")]
@@ -250,7 +461,7 @@ internal sealed class KeyboardHook : IDisposable
         public int ptY;
     }
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern int GetMessage(out MSG msg, nint hwnd, uint min, uint max);
 
     [DllImport("user32.dll")]
@@ -259,7 +470,7 @@ internal sealed class KeyboardHook : IDisposable
     [DllImport("user32.dll")]
     private static extern nint DispatchMessage(ref MSG msg);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PostThreadMessage(uint threadId, uint msg, nint wParam, nint lParam);
 
