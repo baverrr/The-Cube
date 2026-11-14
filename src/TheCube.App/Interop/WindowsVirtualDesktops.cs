@@ -132,6 +132,22 @@ internal sealed class WindowsVirtualDesktops : IVirtualDesktopService
         return 0;
     });
 
+    /// <summary>
+    /// Make sure a window of this process (Windows only lets a process move its own) is on the current desktop,
+    /// moving it only if it isn't. Returns whether it is there afterwards, as Windows reports it.
+    /// </summary>
+    public bool MoveToCurrentDesktop(nint hwnd) => Call(api =>
+    {
+        if (_manager.IsWindowOnCurrentVirtualDesktop(hwnd))
+        {
+            return true;
+        }
+
+        var current = api.GetId(api.GetCurrent());
+        _manager.MoveWindowToDesktop(hwnd, ref current);
+        return _manager.IsWindowOnCurrentVirtualDesktop(hwnd);
+    });
+
     public void SwitchTo(int index, bool animate)
     {
         Call(api =>

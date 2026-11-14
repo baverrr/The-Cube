@@ -423,6 +423,7 @@ public class DesktopTests
         public void SwitchTo(int index, bool animate) { Switches.Add((index, animate)); Current = index; }
         public void CreateDesktop() => Count++;
         public int? GetWindowDesktopIndex(nint hwnd) => null;
+        public bool MoveToCurrentDesktop(nint hwnd) => true;
     }
 
     [Fact]

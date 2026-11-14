@@ -24,6 +24,12 @@ public interface IVirtualDesktopService
 
     /// <summary>Which desktop a top-level window is on, or null if unknown or on all desktops.</summary>
     int? GetWindowDesktopIndex(nint hwnd);
+
+    /// <summary>
+    /// Make sure a top-level window of this process is on the current desktop, moving it if it isn't. Returns
+    /// whether it is there afterwards. Throws if Windows refuses (e.g. a window the shell doesn't track).
+    /// </summary>
+    bool MoveToCurrentDesktop(nint hwnd);
 }
 
 /// <summary>Which set of undocumented virtual desktop interfaces a Windows build uses.</summary>

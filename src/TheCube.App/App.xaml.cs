@@ -234,7 +234,10 @@ public partial class App : Application
             return $"Couldn't save {SettingsPath}: {ex.Message}";
         }
 
-        Settings = settings;
+        // A copy: the settings window keeps editing its own object, and kept cube windows rely on Settings being
+        // replaced (never edited in place) whenever it changes.
+        Settings = settings.Clone();
+        Cube?.SettingsChanged(); // kept cube windows were made with the old settings
         RegisterHotkeys();
         _edges?.Configure(Settings.BorderActivate);
         _pager?.Configure(Settings.ShowPager);
@@ -502,6 +505,15 @@ public partial class App : Application
         UnregisterHotkeys();
         _keyboardHook?.Dispose();
         _keyboardHook = null;
+        try
+        {
+            Cube?.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            EventLog.Write("exit: closing kept cube windows failed: " + ex); // carry on releasing the rest
+        }
+
         _showWait?.Unregister(null);
         _showEvent?.Dispose();
         _singleInstance?.Dispose();
