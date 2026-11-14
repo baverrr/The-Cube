@@ -16,8 +16,8 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
 ## Building and testing
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). See [Development](README.md#development)
-for the commands. `TheCube.Core` and its tests build and run on any OS. The app builds anywhere but only
+You need the [.NET 10 SDK](https://dotnet.microsoft.com/download). The commands are in the README's
+"For developers" fold, under [Help](README.md#help). `TheCube.Core` and its tests build and run on any OS. The app builds anywhere but only
 runs on Windows, so anything that touches `TheCube.App` needs testing on a real Windows PC. Say in the PR
 which Windows build(s) you tried it on.
 
