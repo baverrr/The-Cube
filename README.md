@@ -139,6 +139,7 @@ Open Settings from the tray menu. Changes apply when you press Save. You can pic
 - Supported builds: 19044–19045, 22621–22631 (updated since August 2023) and 26100+. Newer builds try the 24H2 interfaces. Windows Server and Windows 11 21H2 aren't supported
 - Diagnostics in the tray menu shows the interfaces picked, hotkey status and a preview of every face
 - What's left to do: [PLAN.md](PLAN.md). Signing setup: [docs/SIGNING.md](docs/SIGNING.md)
+- How to report bugs and send changes: [CONTRIBUTING.md](CONTRIBUTING.md). Security problems: report them privately, as [SECURITY.md](SECURITY.md) explains
 </details>
 
 ## License
