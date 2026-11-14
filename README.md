@@ -111,6 +111,8 @@ Open Settings from the tray menu. Changes apply when you press Save. You can pic
 
 **Win+C opens Copilot instead.** The Cube then uses a keyboard hook. Diagnostics shows whether it's on. If it still fails, pick another shortcut in Settings.
 
+**The cube feels slow to open.** It keeps its windows ready between opens, so it shows up about 0.2 s after Win+C, then zooms out. For a quicker zoom, lower Animation length in Settings (about 250-300 ms).
+
 **"Windows build … isn't supported".** Please open an issue with the build number from Diagnostics.
 
 **Some windows are missing from other desktops' faces.** Some apps (games, some browsers and video players) can't be captured while hidden. Visit that desktop once and they'll show from then on. Minimized windows and desktop icons are never shown.
